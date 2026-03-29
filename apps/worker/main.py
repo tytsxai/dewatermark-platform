@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _THIS_DIR.parents[1]
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+from wm_platform.config import load_settings
+from wm_platform.comfy_runtime import build_comfyui_command, comfyui_health, start_comfyui, wait_for_comfyui
+from wm_platform.db import init_db
+from wm_platform.doctor import provider_doctor_report
+from wm_platform.maintenance import run_file_cleanup
+from wm_platform.provider_runtime import ProviderRuntime
+from wm_platform.repository import JobRepository
+from wm_platform.runtime_installer import RuntimeInstaller
+from wm_platform.storage import ensure_storage_dirs
+from wm_platform.worker_service import WorkerService
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Dewatermark worker process")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="process at most one polling cycle, then exit",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="run file cleanup and exit",
+    )
+    parser.add_argument(
+        "--execute-cleanup",
+        action="store_true",
+        help="with --cleanup: delete candidate files (default is dry-run)",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="print provider/runtime readiness summary and exit",
+    )
+    parser.add_argument(
+        "--runtime-plan",
+        action="store_true",
+        help="print local AI runtime bootstrap plan and exit",
+    )
+    parser.add_argument(
+        "--install-runtime",
+        action="store_true",
+        help="install local AI runtime skeleton and exit",
+    )
+    parser.add_argument(
+        "--repos-only",
+        action="store_true",
+        help="with --install-runtime: skip python package installs",
+    )
+    parser.add_argument(
+        "--comfyui-plan",
+        action="store_true",
+        help="print ComfyUI startup command and exit",
+    )
+    parser.add_argument(
+        "--comfyui-health",
+        action="store_true",
+        help="check ComfyUI /system_stats and exit",
+    )
+    parser.add_argument(
+        "--start-comfyui",
+        action="store_true",
+        help="start ComfyUI and wait for health, then exit",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+    settings = load_settings()
+    ensure_storage_dirs(settings)
+    init_db(settings)
+
+    repository = JobRepository(settings)
+    if args.doctor:
+        report = provider_doctor_report(settings)
+        logging.info("doctor report=%s", report)
+        print(json.dumps(report, ensure_ascii=True))
+        return
+    if args.runtime_plan:
+        plan = RuntimeInstaller(settings).plan()
+        logging.info("runtime plan=%s", plan)
+        print(json.dumps(plan, ensure_ascii=True))
+        return
+    if args.install_runtime:
+        payload = {
+            "mode": "repos_only" if args.repos_only else "full_framework",
+            "messages": RuntimeInstaller(settings).install(include_python_packages=not args.repos_only),
+        }
+        logging.info("runtime install=%s", payload)
+        print(json.dumps(payload, ensure_ascii=True))
+        return
+    if args.comfyui_plan:
+        payload = {"command": build_comfyui_command(settings)}
+        logging.info("comfyui plan=%s", payload)
+        print(json.dumps(payload, ensure_ascii=True))
+        return
+    if args.comfyui_health:
+        payload = comfyui_health(settings)
+        logging.info("comfyui health=%s", payload)
+        print(json.dumps(payload, ensure_ascii=True))
+        return
+    if args.start_comfyui:
+        process = start_comfyui(settings)
+        payload = {
+            "pid": process.pid,
+            "command": build_comfyui_command(settings),
+            "health": wait_for_comfyui(settings),
+        }
+        logging.info("comfyui started=%s", payload)
+        print(json.dumps(payload, ensure_ascii=True))
+        return
+    if args.cleanup:
+        report = run_file_cleanup(settings=settings, repository=repository, execute=args.execute_cleanup)
+        logging.info("cleanup report=%s", report)
+        print(json.dumps(report, ensure_ascii=True))
+        return
+
+    providers = ProviderRuntime(settings)
+    service = WorkerService(settings=settings, repository=repository, providers=providers)
+
+    if args.once:
+        service.run_once()
+        return
+
+    try:
+        service.run_forever()
+    except KeyboardInterrupt:
+        service.stop()
+
+
+if __name__ == "__main__":
+    main()
