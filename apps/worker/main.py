@@ -145,6 +145,7 @@ def main() -> None:
 
     if args.once:
         service.run_once()
+        service.callback_service.run_once()
         return
 
     try:

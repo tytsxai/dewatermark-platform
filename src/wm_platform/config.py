@@ -22,8 +22,10 @@ class Settings:
     max_upload_bytes: int
     worker_poll_interval_seconds: float
     job_claim_timeout_seconds: int
+    job_claim_heartbeat_seconds: float
     callback_retry_count: int
     callback_retry_delay_seconds: float
+    provider_probe_cache_seconds: float
     provider_runtime_delay_seconds: float
     comfyui_api_url: str
     auto_start_comfyui: bool
@@ -86,8 +88,10 @@ def load_settings() -> Settings:
         max_upload_bytes=int(os.getenv("DWM_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024))),
         worker_poll_interval_seconds=float(os.getenv("DWM_WORKER_POLL_INTERVAL_SECONDS", "1.0")),
         job_claim_timeout_seconds=int(os.getenv("DWM_JOB_CLAIM_TIMEOUT_SECONDS", "300")),
+        job_claim_heartbeat_seconds=float(os.getenv("DWM_JOB_CLAIM_HEARTBEAT_SECONDS", "30.0")),
         callback_retry_count=int(os.getenv("DWM_CALLBACK_RETRY_COUNT", "3")),
         callback_retry_delay_seconds=float(os.getenv("DWM_CALLBACK_RETRY_DELAY_SECONDS", "1.0")),
+        provider_probe_cache_seconds=float(os.getenv("DWM_PROVIDER_PROBE_CACHE_SECONDS", "10.0")),
         provider_runtime_delay_seconds=float(os.getenv("DWM_PROVIDER_RUNTIME_DELAY_SECONDS", "0.2")),
         comfyui_api_url=os.getenv("DWM_COMFYUI_API_URL", "http://127.0.0.1:8188"),
         auto_start_comfyui=_env_bool("DWM_AUTO_START_COMFYUI", False),

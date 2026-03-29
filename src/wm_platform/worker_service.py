@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import socket
+import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from wm_platform.config import Settings
-from wm_platform.models import CallbackPayload, JobRecord
+from wm_platform.models import CallbackOutboxRecord, JobRecord
 from wm_platform.provider_runtime import ProviderExecutionError, ProviderRuntime
 from wm_platform.repository import JobRepository
 
@@ -25,13 +25,24 @@ class WorkerService:
         self.providers = providers
         self.lock_owner = f"{socket.gethostname()}:{int(time.time())}"
         self._running = True
+        self.callback_service = CallbackWorkerService(
+            settings=settings,
+            repository=repository,
+            lock_owner=f"{self.lock_owner}:callbacks",
+        )
 
     def run_forever(self) -> None:
         logger.info("worker started lock_owner=%s db=%s", self.lock_owner, self.settings.db_path)
-        while self._running:
-            processed = self.run_once()
-            if not processed:
-                time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+        callback_thread = threading.Thread(target=self.callback_service.run_forever, name="callback-worker", daemon=True)
+        callback_thread.start()
+        try:
+            while self._running:
+                processed = self.run_once()
+                if not processed:
+                    time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+        finally:
+            self.callback_service.stop()
+            callback_thread.join(timeout=2.0)
 
     def run_once(self) -> bool:
         reclaimed = self.repository.reset_stale_claims(self.settings.job_claim_timeout_seconds)
@@ -47,10 +58,19 @@ class WorkerService:
 
     def stop(self) -> None:
         self._running = False
+        self.callback_service.stop()
 
     def _process_job(self, job: JobRecord) -> None:
         started_at = time.monotonic()
         logger.info("processing job=%s provider_requested=%s", job.job_id, job.provider_requested)
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_job_claim,
+            args=(job.job_id, heartbeat_stop),
+            name=f"job-heartbeat-{job.job_id}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
 
         try:
             provider_name, output_path = self.providers.run_with_fallback(job)
@@ -107,63 +127,25 @@ class WorkerService:
                 logger.warning("skip exception finalize for stale claim job_id=%s", job.job_id)
                 return
             logger.exception("unhandled worker exception job_id=%s duration_ms=%s", job.job_id, duration_ms)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=1.0)
 
-        self._dispatch_callback(updated)
+        self.repository.enqueue_callback(updated)
 
-    def _dispatch_callback(self, job: JobRecord) -> None:
-        if not job.callback_url:
-            return
-
-        payload = CallbackPayload(
-            job_id=job.job_id,
-            status=job.status,
-            provider=job.provider_selected,
-            output_path=job.output_path,
-            error_code=job.error_code,
-            error_message=job.error_message,
-        ).model_dump()
-        body = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
-        max_attempts = max(1, self.settings.callback_retry_count)
-
-        for attempt in range(1, max_attempts + 1):
-            headers = {"Content-Type": "application/json"}
-            timestamp = str(int(datetime.now(UTC).timestamp()))
-            if job.callback_secret:
-                signature = self._build_signature(job.callback_secret, timestamp, body)
-                headers["X-Timestamp"] = timestamp
-                headers["X-Signature"] = signature
-
-            try:
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(job.callback_url, content=body, headers=headers)
-                if 200 <= response.status_code < 300:
-                    self.repository.record_callback_event(
-                        job_id=job.job_id,
-                        attempt_no=attempt,
-                        status="succeeded",
-                        response_code=response.status_code,
-                        response_body=response.text[:1000],
-                    )
-                    return
-
-                self.repository.record_callback_event(
-                    job_id=job.job_id,
-                    attempt_no=attempt,
-                    status="failed",
-                    response_code=response.status_code,
-                    response_body=response.text[:1000],
-                )
-            except Exception as exc:
-                self.repository.record_callback_event(
-                    job_id=job.job_id,
-                    attempt_no=attempt,
-                    status="failed",
-                    response_code=None,
-                    response_body=str(exc)[:1000],
-                )
-
-            if attempt < max_attempts:
-                time.sleep(max(0.0, self.settings.callback_retry_delay_seconds))
+    def _heartbeat_job_claim(self, job_id: str, stop_event: threading.Event) -> None:
+        interval = max(
+            0.01,
+            min(
+                self.settings.job_claim_heartbeat_seconds,
+                max(0.01, self.settings.job_claim_timeout_seconds / 3),
+            ),
+        )
+        while not stop_event.wait(interval):
+            renewed = self.repository.renew_job_claim(job_id=job_id, lock_owner=self.lock_owner)
+            if not renewed:
+                logger.warning("lost job claim during heartbeat job_id=%s lock_owner=%s", job_id, self.lock_owner)
+                return
 
     @staticmethod
     def _build_signature(secret: str, timestamp: str, body: str) -> str:
@@ -173,3 +155,74 @@ class WorkerService:
     @staticmethod
     def _duration_ms(started_at: float) -> int:
         return int((time.monotonic() - started_at) * 1000)
+
+
+class CallbackWorkerService:
+    def __init__(self, settings: Settings, repository: JobRepository, lock_owner: str | None = None) -> None:
+        self.settings = settings
+        self.repository = repository
+        self.lock_owner = lock_owner or f"{socket.gethostname()}:{int(time.time())}:callbacks"
+        self._running = True
+
+    def run_forever(self) -> None:
+        logger.info("callback worker started lock_owner=%s db=%s", self.lock_owner, self.settings.db_path)
+        while self._running:
+            processed = self.run_once()
+            if not processed:
+                time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+
+    def run_once(self) -> bool:
+        reclaimed = self.repository.reset_stale_callback_claims(self.settings.job_claim_timeout_seconds)
+        if reclaimed:
+            logger.warning("reclaimed %d stale callback deliveries", reclaimed)
+
+        delivery = self.repository.claim_next_callback(lock_owner=self.lock_owner)
+        if not delivery:
+            return False
+
+        self._process_delivery(delivery)
+        return True
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _process_delivery(self, delivery: CallbackOutboxRecord) -> None:
+        headers = {"Content-Type": "application/json"}
+        timestamp = str(int(datetime.now(UTC).timestamp()))
+        if delivery.callback_secret:
+            signature = WorkerService._build_signature(delivery.callback_secret, timestamp, delivery.payload_json)
+            headers["X-Timestamp"] = timestamp
+            headers["X-Signature"] = signature
+
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(delivery.callback_url, content=delivery.payload_json, headers=headers)
+            if 200 <= response.status_code < 300:
+                self.repository.mark_callback_succeeded(
+                    outbox_id=delivery.id,
+                    lock_owner=self.lock_owner,
+                    response_code=response.status_code,
+                    response_body=response.text[:1000],
+                )
+                return
+
+            self.repository.mark_callback_retry(
+                outbox_id=delivery.id,
+                lock_owner=self.lock_owner,
+                response_code=response.status_code,
+                response_body=response.text[:1000],
+                next_attempt_at=self._next_attempt_at(),
+            )
+        except Exception as exc:
+            self.repository.mark_callback_retry(
+                outbox_id=delivery.id,
+                lock_owner=self.lock_owner,
+                response_code=None,
+                response_body=str(exc)[:1000],
+                next_attempt_at=self._next_attempt_at(),
+            )
+
+    def _next_attempt_at(self) -> datetime:
+        return datetime.now(UTC).replace(microsecond=0) + timedelta(
+            seconds=max(0.0, self.settings.callback_retry_delay_seconds)
+        )

@@ -4,11 +4,12 @@ import json
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from wm_platform.config import Settings
 from wm_platform.db import db_connection, sha256_text
-from wm_platform.models import JobCreate, JobRecord
+from wm_platform.models import CallbackOutboxRecord, CallbackPayload, JobCreate, JobRecord
 
 
 def utc_now() -> datetime:
@@ -40,6 +41,30 @@ def _parse_job(row: Any) -> JobRecord:
             "updated_at": row["updated_at"],
             "claimed_at": row["claimed_at"],
             "lock_owner": row["lock_owner"],
+        }
+    )
+
+
+def _parse_callback_outbox(row: Any) -> CallbackOutboxRecord:
+    return CallbackOutboxRecord.model_validate(
+        {
+            "id": row["id"],
+            "job_id": row["job_id"],
+            "tenant_id": row["tenant_id"],
+            "callback_url": row["callback_url"],
+            "callback_secret": row["callback_secret"],
+            "payload_json": row["payload_json"],
+            "status": row["status"],
+            "attempt_count": row["attempt_count"],
+            "max_attempts": row["max_attempts"],
+            "next_attempt_at": row["next_attempt_at"],
+            "last_error": row["last_error"],
+            "last_response_code": row["last_response_code"],
+            "last_response_body": row["last_response_body"],
+            "claimed_at": row["claimed_at"],
+            "lock_owner": row["lock_owner"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         }
     )
 
@@ -214,6 +239,20 @@ class JobRepository:
             )
         return int(cursor.rowcount or 0)
 
+    def renew_job_claim(self, job_id: str, lock_owner: str) -> bool:
+        now = utc_now().isoformat()
+        with db_connection(self.settings) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET claimed_at = ?,
+                    updated_at = ?
+                WHERE job_id = ? AND status = 'running' AND lock_owner = ?
+                """,
+                (now, now, job_id, lock_owner),
+            )
+        return bool(cursor.rowcount)
+
     def claim_next_job(self, lock_owner: str) -> JobRecord | None:
         now = utc_now().isoformat()
         with db_connection(self.settings) as connection:
@@ -285,6 +324,7 @@ class JobRepository:
                 SELECT job_id, input_path, output_path
                 FROM jobs
                 WHERE updated_at <= ?
+                  AND status NOT IN ('queued', 'running')
                 """,
                 (older_than.isoformat(),),
             ).fetchall()
@@ -292,6 +332,88 @@ class JobRepository:
             "candidate_jobs": len(rows),
             "candidate_files": sum(1 for row in rows for path in (row["input_path"], row["output_path"]) if path),
         }
+
+    def list_protected_file_paths(self, older_than: datetime) -> set[str]:
+        protected: set[str] = set()
+        with db_connection(self.settings) as connection:
+            rows = connection.execute(
+                """
+                SELECT input_path, output_path
+                FROM jobs
+                WHERE status IN ('queued', 'running') OR updated_at > ?
+                """,
+                (older_than.isoformat(),),
+            ).fetchall()
+        for row in rows:
+            for path in (row["input_path"], row["output_path"]):
+                if path:
+                    protected.add(str(path))
+        return protected
+
+    def list_jobs_for_cleanup(self, older_than: datetime) -> list[JobRecord]:
+        with db_connection(self.settings) as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM jobs
+                WHERE status NOT IN ('queued', 'running')
+                  AND updated_at <= ?
+                ORDER BY updated_at ASC
+                """,
+                (older_than.isoformat(),),
+            ).fetchall()
+        return [_parse_job(row) for row in rows]
+
+    def clear_job_artifacts(self, job_id: str, *, clear_input: bool = False, clear_output: bool = False) -> None:
+        updates: list[str] = []
+        if clear_input:
+            updates.append("input_path = ''")
+        if clear_output:
+            updates.append("output_path = NULL")
+        if not updates:
+            return
+
+        updates.append("updated_at = ?")
+        with db_connection(self.settings) as connection:
+            connection.execute(
+                f"UPDATE jobs SET {', '.join(updates)} WHERE job_id = ?",
+                (utc_now().isoformat(), job_id),
+            )
+
+    def clear_file_references(self, file_path: str, older_than: datetime) -> int:
+        with db_connection(self.settings) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET input_path = CASE WHEN input_path = ? THEN '' ELSE input_path END,
+                    output_path = CASE WHEN output_path = ? THEN NULL ELSE output_path END,
+                    updated_at = ?
+                WHERE updated_at <= ?
+                  AND status NOT IN ('queued', 'running')
+                  AND (input_path = ? OR output_path = ?)
+                """,
+                (
+                    file_path,
+                    file_path,
+                    utc_now().isoformat(),
+                    older_than.isoformat(),
+                    file_path,
+                    file_path,
+                ),
+            )
+        return int(cursor.rowcount or 0)
+
+    def clear_missing_file_references(self, older_than: datetime) -> int:
+        cleared = 0
+        jobs = self.list_jobs_for_cleanup(older_than)
+        for job in jobs:
+            clear_input = bool(job.input_path) and not Path(str(job.input_path)).exists()
+            clear_output = bool(job.output_path) and not Path(str(job.output_path)).exists()
+            if not clear_input and not clear_output:
+                continue
+            self.clear_job_artifacts(job.job_id, clear_input=clear_input, clear_output=clear_output)
+            cleared += 1
+        return cleared
 
     def mark_job_succeeded(
         self,
@@ -390,6 +512,205 @@ class JobRepository:
             }
             for row in rows
         ]
+
+    def enqueue_callback(self, job: JobRecord) -> None:
+        if not job.callback_url:
+            return
+        now = utc_now().isoformat()
+        payload_json = CallbackPayload(
+            job_id=job.job_id,
+            status=job.status,
+            provider=job.provider_selected,
+            output_path=job.output_path,
+            error_code=job.error_code,
+            error_message=job.error_message,
+        ).model_dump_json()
+        with db_connection(self.settings) as connection:
+            connection.execute(
+                """
+                INSERT INTO callback_outbox (
+                    job_id, tenant_id, callback_url, callback_secret, payload_json,
+                    status, attempt_count, max_attempts, next_attempt_at, last_error,
+                    last_response_code, last_response_body, claimed_at, lock_owner,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)
+                """,
+                (
+                    job.job_id,
+                    job.tenant_id,
+                    job.callback_url,
+                    job.callback_secret,
+                    payload_json,
+                    max(1, self.settings.callback_retry_count),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+    def reset_stale_callback_claims(self, worker_timeout_seconds: int) -> int:
+        cutoff = (utc_now() - timedelta(seconds=worker_timeout_seconds)).isoformat()
+        with db_connection(self.settings) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE callback_outbox
+                SET status = CASE
+                      WHEN attempt_count >= max_attempts THEN 'failed'
+                      ELSE 'pending'
+                    END,
+                    claimed_at = NULL,
+                    lock_owner = NULL,
+                    updated_at = ?
+                WHERE status = 'delivering' AND claimed_at < ?
+                """,
+                (utc_now().isoformat(), cutoff),
+            )
+        return int(cursor.rowcount or 0)
+
+    def claim_next_callback(self, lock_owner: str) -> CallbackOutboxRecord | None:
+        now = utc_now().isoformat()
+        with db_connection(self.settings) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT *
+                FROM callback_outbox
+                WHERE status = 'pending'
+                  AND next_attempt_at <= ?
+                ORDER BY next_attempt_at ASC, id ASC
+                LIMIT 1
+                """,
+                (now,),
+            ).fetchone()
+            if row is None:
+                return None
+
+            cursor = connection.execute(
+                """
+                UPDATE callback_outbox
+                SET status = 'delivering',
+                    claimed_at = ?,
+                    lock_owner = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (now, lock_owner, now, row["id"]),
+            )
+            if cursor.rowcount == 0:
+                return None
+
+            claimed_row = connection.execute("SELECT * FROM callback_outbox WHERE id = ?", (row["id"],)).fetchone()
+        return _parse_callback_outbox(claimed_row)
+
+    def mark_callback_succeeded(
+        self,
+        outbox_id: int,
+        lock_owner: str,
+        response_code: int,
+        response_body: str | None,
+    ) -> None:
+        now = utc_now().isoformat()
+        with db_connection(self.settings) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM callback_outbox
+                WHERE id = ? AND status = 'delivering' AND lock_owner = ?
+                """,
+                (outbox_id, lock_owner),
+            ).fetchone()
+            if row is None:
+                return
+
+            next_attempt = int(row["attempt_count"]) + 1
+            connection.execute(
+                """
+                UPDATE callback_outbox
+                SET status = 'succeeded',
+                    attempt_count = ?,
+                    last_error = NULL,
+                    last_response_code = ?,
+                    last_response_body = ?,
+                    claimed_at = NULL,
+                    lock_owner = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'delivering' AND lock_owner = ?
+                """,
+                (next_attempt, response_code, response_body, now, outbox_id, lock_owner),
+            )
+            connection.execute(
+                """
+                INSERT INTO callback_events (job_id, attempt_no, status, response_code, response_body, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (row["job_id"], next_attempt, "succeeded", response_code, response_body, now),
+            )
+
+    def mark_callback_retry(
+        self,
+        outbox_id: int,
+        lock_owner: str,
+        response_code: int | None,
+        response_body: str | None,
+        next_attempt_at: datetime,
+    ) -> None:
+        now = utc_now().isoformat()
+        with db_connection(self.settings) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM callback_outbox
+                WHERE id = ? AND status = 'delivering' AND lock_owner = ?
+                """,
+                (outbox_id, lock_owner),
+            ).fetchone()
+            if row is None:
+                return
+
+            next_attempt = int(row["attempt_count"]) + 1
+            final_status = "failed" if next_attempt >= int(row["max_attempts"]) else "pending"
+            connection.execute(
+                """
+                UPDATE callback_outbox
+                SET status = ?,
+                    attempt_count = ?,
+                    next_attempt_at = ?,
+                    last_error = ?,
+                    last_response_code = ?,
+                    last_response_body = ?,
+                    claimed_at = NULL,
+                    lock_owner = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'delivering' AND lock_owner = ?
+                """,
+                (
+                    final_status,
+                    next_attempt,
+                    next_attempt_at.isoformat(),
+                    response_body,
+                    response_code,
+                    response_body,
+                    now,
+                    outbox_id,
+                    lock_owner,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO callback_events (job_id, attempt_no, status, response_code, response_body, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (row["job_id"], next_attempt, "failed", response_code, response_body, now),
+            )
+
+    def get_callback_outbox(self, job_id: str) -> list[CallbackOutboxRecord]:
+        with db_connection(self.settings) as connection:
+            rows = connection.execute(
+                "SELECT * FROM callback_outbox WHERE job_id = ? ORDER BY id ASC",
+                (job_id,),
+            ).fetchall()
+        return [_parse_callback_outbox(row) for row in rows]
 
     @staticmethod
     def default_fallback_chain(provider_requested: str) -> str:

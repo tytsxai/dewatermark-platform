@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, Request, UploadFile
@@ -27,14 +30,16 @@ AllowedProvider = Literal["auto", "cloud_inpaint", "comfy_diffueraser", "local_f
 ALLOWED_PROVIDERS: set[str] = {"auto", "cloud_inpaint", "comfy_diffueraser", "local_fallback"}
 ALLOWED_MEDIA_TYPES: set[str] = {"video", "image"}
 ALLOWED_STATUSES: set[str] = {"queued", "running", "succeeded", "failed", "canceled"}
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Dewatermark Platform API", version="0.1.0")
-
-    @app.on_event("startup")
-    def _startup() -> None:
+    @asynccontextmanager
+    async def _lifespan(_: FastAPI):
         init_runtime()
+        yield
+
+    app = FastAPI(title="Dewatermark Platform API", version="0.1.0", lifespan=_lifespan)
 
     @app.exception_handler(AppError)
     async def _handle_app_error(_: Request, exc: AppError) -> JSONResponse:
@@ -53,7 +58,11 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
-        return JSONResponse(status_code=500, content=error_payload("INTERNAL_ERROR", str(exc)))
+        logger.exception("unhandled api exception")
+        return JSONResponse(
+            status_code=500,
+            content=error_payload("INTERNAL_ERROR", "internal server error"),
+        )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -166,6 +175,8 @@ def create_app() -> FastAPI:
         job = repository.get_job(job_id)
         if job is None or job.tenant_id != tenant_id:
             raise AppError("FILE_NOT_FOUND", "job not found", 404)
+        if job.status == "succeeded" and (not job.output_path or not Path(job.output_path).exists()):
+            raise AppError("ARTIFACT_MISSING", "job artifact missing", 410)
         return JobResultResponse(
             job_id=job.job_id,
             status=job.status,

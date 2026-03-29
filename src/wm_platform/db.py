@@ -65,6 +65,35 @@ CREATE TABLE IF NOT EXISTS callback_events (
     response_body TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS callback_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    callback_url TEXT NOT NULL,
+    callback_secret TEXT,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    last_response_code INTEGER,
+    last_response_body TEXT,
+    claimed_at TEXT,
+    lock_owner TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_callback_outbox_status_next_attempt
+ON callback_outbox(status, next_attempt_at);
+
+CREATE INDEX IF NOT EXISTS idx_callback_outbox_job_id
+ON callback_outbox(job_id);
+
+CREATE INDEX IF NOT EXISTS idx_callback_outbox_status_lock_claimed
+ON callback_outbox(status, lock_owner, claimed_at);
 """
 
 
@@ -76,9 +105,17 @@ def ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _configure_connection(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
+    connection.execute("PRAGMA busy_timeout = 30000")
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db(settings: Settings) -> None:
     ensure_parent_dir(settings.db_path)
     with sqlite3.connect(settings.db_path) as connection:
+        _configure_connection(connection)
         connection.executescript(SCHEMA)
         connection.commit()
 
@@ -87,6 +124,7 @@ def init_db(settings: Settings) -> None:
 def db_connection(settings: Settings) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(settings.db_path, timeout=30, detect_types=sqlite3.PARSE_DECLTYPES)
     connection.row_factory = sqlite3.Row
+    _configure_connection(connection)
     try:
         yield connection
         connection.commit()

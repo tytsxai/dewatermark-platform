@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -15,6 +17,7 @@ from wm_platform.runtime_contract import expected_model_entries, expected_repo_p
 from wm_platform.storage import build_output_path
 
 AUTO_FALLBACK_ORDER = ["comfy_diffueraser", "cloud_inpaint", "local_fallback"]
+_PROBE_CACHE: dict[tuple[str, str, str, str], tuple[float, list[ProviderProbeResult]]] = {}
 
 
 class ProviderExecutionError(Exception):
@@ -279,6 +282,7 @@ class _LocalFallbackProvider(_BaseProvider):
         )
 
     @staticmethod
+    @lru_cache(maxsize=4)
     def _ffmpeg_supports_delogo() -> bool:
         ffmpeg_path = shutil.which("ffmpeg")
         if not ffmpeg_path:
@@ -308,7 +312,20 @@ class ProviderRuntime:
         }
 
     def probe_all(self) -> list[ProviderProbeResult]:
-        return [self.registry[name].probe() for name in AUTO_FALLBACK_ORDER]
+        cache_key = (
+            str(self.settings.runtime_root),
+            self.settings.comfyui_api_url,
+            self.settings.local_fallback_mode,
+            str(self.settings.comfyui_diffueraser_workflow),
+        )
+        now = time.monotonic()
+        cached = _PROBE_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < max(0.0, self.settings.provider_probe_cache_seconds):
+            return cached[1]
+
+        probes = [self.registry[name].probe() for name in AUTO_FALLBACK_ORDER]
+        _PROBE_CACHE[cache_key] = (now, probes)
+        return probes
 
     def run_with_fallback(self, job: JobRecord) -> tuple[str, str]:
         chain = self._resolve_fallback_chain(job)

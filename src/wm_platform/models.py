@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 MediaType = Literal["video", "image"]
 ProviderName = Literal["auto", "cloud_inpaint", "comfy_diffueraser", "local_fallback"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+CallbackDeliveryStatus = Literal["pending", "delivering", "succeeded", "failed"]
 
 
 class JobCreate(BaseModel):
@@ -117,3 +118,23 @@ class CallbackPayload(BaseModel):
     output_path: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+class CallbackOutboxRecord(BaseModel):
+    id: int
+    job_id: str
+    tenant_id: str
+    callback_url: str
+    callback_secret: str | None = None
+    payload_json: str
+    status: CallbackDeliveryStatus
+    attempt_count: int = 0
+    max_attempts: int
+    next_attempt_at: datetime
+    last_error: str | None = None
+    last_response_code: int | None = None
+    last_response_body: str | None = None
+    claimed_at: datetime | None = None
+    lock_owner: str | None = None
+    created_at: datetime
+    updated_at: datetime
