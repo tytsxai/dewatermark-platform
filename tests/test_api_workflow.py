@@ -4,7 +4,9 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import io
 import json
+import os
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -16,12 +18,13 @@ from wm_platform.comfy_runtime import build_comfyui_command
 from wm_platform.dependencies import get_repository
 from wm_platform.db import db_connection
 from wm_platform.doctor import provider_doctor_report
+from wm_platform.maintenance import run_file_cleanup
 from wm_platform.models import JobCreate
 from wm_platform.provider_runtime import ProviderRuntime
 from wm_platform.repository import JobRepository
 from wm_platform.runtime_contract import expected_model_entries, expected_repo_paths
 from wm_platform.runtime_installer import RuntimeInstaller
-from wm_platform.worker_service import WorkerService
+from wm_platform.worker_service import CallbackWorkerService, WorkerService
 
 
 def _upload_payload(files: dict) -> dict:
@@ -115,7 +118,7 @@ def test_callback_event_record(job_repo):
     assert events[-1]["attempt_no"] == 1
 
 
-def test_worker_callback_retry_records_events(job_repo, settings, monkeypatch):
+def test_job_worker_enqueues_callback_without_sending(job_repo, settings, monkeypatch):
     payload = JobCreate(
         tenant_id=settings.default_tenant_id,
         media_type="video",
@@ -126,6 +129,39 @@ def test_worker_callback_retry_records_events(job_repo, settings, monkeypatch):
         callback_secret="secret",
     )
     job = job_repo.create_job(payload)
+
+    attempts = {"count": 0}
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            attempts["count"] += 1
+            raise AssertionError("job worker should not dispatch callbacks inline")
+
+    monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _UnexpectedClient)
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    assert service.run_once() is True
+
+    outbox = job_repo.get_callback_outbox(job.job_id)
+    assert len(outbox) == 1
+    assert outbox[0].status == "pending"
+    events = job_repo.get_callback_events(job.job_id)
+    assert events == []
+    assert attempts["count"] == 0
+
+
+def test_callback_worker_retry_records_events(job_repo, settings, monkeypatch):
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "callback-sample.mp4")),
+        callback_url="http://callback.local/notify",
+        callback_secret="secret",
+    )
+    job = job_repo.create_job(payload)
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    assert service.run_once() is True
 
     attempts = {"count": 0}
 
@@ -146,8 +182,10 @@ def test_worker_callback_retry_records_events(job_repo, settings, monkeypatch):
             return SimpleNamespace(status_code=200, text="ok")
 
     monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _FakeClient)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
-    assert service.run_once() is True
+    callback_service = CallbackWorkerService(settings=settings, repository=job_repo, lock_owner="callback-test")
+    assert callback_service.run_once() is True
+    assert callback_service.run_once() is True
+    assert callback_service.run_once() is True
 
     events = job_repo.get_callback_events(job.job_id)
     assert len(events) == 3
@@ -189,6 +227,35 @@ def test_job_result_endpoint(api_client, auth_headers, job_repo, settings):
     assert body["output_path"] is not None
     assert Path(body["output_path"]).exists()
     assert body.get("download_url") in {None, ""}
+
+
+def test_job_result_endpoint_reports_missing_artifact(api_client, auth_headers, job_repo, settings):
+    fallback_chain = JobRepository.default_fallback_chain("local_fallback")
+    output_path = settings.outbox_dir / "missing.mp4"
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=fallback_chain,
+        idempotency_key="result-missing",
+        input_path=str(_prepare_video_file(settings.inbox_dir, "result-missing.mp4")),
+    )
+    job = job_repo.create_job(payload)
+    with db_connection(settings) as connection:
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status = 'succeeded',
+                output_path = ?,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (str(output_path), datetime.now(UTC).isoformat(), job.job_id),
+        )
+
+    response = api_client.get(f"/v1/jobs/{job.job_id}/result", headers=auth_headers)
+    assert response.status_code == 410
+    assert response.json()["error_code"] == "ARTIFACT_MISSING"
 
 
 def test_cancel_job(api_client, auth_headers):
@@ -233,6 +300,28 @@ def test_provider_probe_shape(api_client, auth_headers):
         assert "runnable" in provider
         assert "message" in provider
         assert "details" in provider
+
+
+def test_provider_probe_is_cached(settings, monkeypatch):
+    calls = {"count": 0}
+
+    def _fake_get(*args, **kwargs):
+        calls["count"] += 1
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr("wm_platform.provider_runtime.httpx.get", _fake_get)
+    runtime = ProviderRuntime(replace(settings, provider_probe_cache_seconds=60.0))
+    runtime.probe_all()
+    runtime.probe_all()
+    assert calls["count"] <= 1
+
+
+def test_db_connection_enables_wal(settings):
+    with db_connection(settings) as connection:
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    assert str(journal_mode).lower() == "wal"
+    assert int(foreign_keys) == 1
 
 
 def test_comfy_probe_reports_missing_runtime(monkeypatch, tmp_path):
@@ -340,9 +429,12 @@ def test_stale_worker_cannot_overwrite_running_job_or_dispatch_callback(job_repo
     assert current.lock_owner == "new-owner"
     assert callback_attempts["count"] == 0
     assert job_repo.get_callback_events(job.job_id) == []
+    assert job_repo.get_callback_outbox(job.job_id) == []
 
 
 def test_callback_retry_count_respects_single_attempt(job_repo, settings, monkeypatch):
+    once_settings = replace(settings, callback_retry_count=1, callback_retry_delay_seconds=0.0)
+    once_repo = JobRepository(once_settings)
     payload = JobCreate(
         tenant_id=settings.default_tenant_id,
         media_type="video",
@@ -351,7 +443,7 @@ def test_callback_retry_count_respects_single_attempt(job_repo, settings, monkey
         input_path=str(_prepare_video_file(settings.inbox_dir, "retry-once.mp4")),
         callback_url="http://callback.local/notify",
     )
-    job = job_repo.create_job(payload)
+    job = once_repo.create_job(payload)
 
     attempts = {"count": 0}
 
@@ -369,15 +461,57 @@ def test_callback_retry_count_respects_single_attempt(job_repo, settings, monkey
             attempts["count"] += 1
             raise RuntimeError("callback down")
 
-    monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _FailingClient)
-    once_settings = replace(settings, callback_retry_count=1, callback_retry_delay_seconds=0.0)
-    service = WorkerService(settings=once_settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=once_settings, repository=once_repo, providers=ProviderRuntime(once_settings))
     assert service.run_once() is True
 
-    events = job_repo.get_callback_events(job.job_id)
+    monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _FailingClient)
+    callback_service = CallbackWorkerService(settings=once_settings, repository=once_repo, lock_owner="callback-once")
+    assert callback_service.run_once() is True
+
+    events = once_repo.get_callback_events(job.job_id)
+    outbox = once_repo.get_callback_outbox(job.job_id)
     assert attempts["count"] == 1
     assert len(events) == 1
     assert events[0]["status"] == "failed"
+    assert outbox[0].status == "failed"
+
+
+def test_worker_renews_claim_while_processing(job_repo, settings, monkeypatch):
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "heartbeat.mp4")),
+    )
+    job = job_repo.create_job(payload)
+    claimed = job_repo.claim_next_job(lock_owner="heartbeat-owner")
+    assert claimed is not None
+
+    heartbeat_settings = replace(settings, job_claim_heartbeat_seconds=0.01, job_claim_timeout_seconds=1)
+    service = WorkerService(settings=heartbeat_settings, repository=job_repo, providers=SimpleNamespace())
+    service.lock_owner = "heartbeat-owner"
+
+    heartbeat_calls = {"count": 0}
+    original_renew = job_repo.renew_job_claim
+
+    def _renew(job_id: str, lock_owner: str) -> bool:
+        heartbeat_calls["count"] += 1
+        return original_renew(job_id, lock_owner)
+
+    monkeypatch.setattr(job_repo, "renew_job_claim", _renew)
+    monkeypatch.setattr(
+        service.providers,
+        "run_with_fallback",
+        lambda _: (time.sleep(0.05), ("local_fallback", str(settings.outbox_dir / "heartbeat.mp4")))[1],
+        raising=False,
+    )
+    service._process_job(claimed)
+
+    updated = job_repo.get_job(job.job_id)
+    assert updated is not None
+    assert updated.status == "succeeded"
+    assert heartbeat_calls["count"] >= 1
 
 
 def test_run_forever_only_sleeps_when_queue_is_empty(settings, monkeypatch):
@@ -392,6 +526,7 @@ def test_run_forever_only_sleeps_when_queue_is_empty(settings, monkeypatch):
         return result
 
     monkeypatch.setattr(service, "run_once", _fake_run_once)
+    monkeypatch.setattr(service.callback_service, "run_forever", lambda: None)
     monkeypatch.setattr("wm_platform.worker_service.time.sleep", lambda seconds: sleep_calls.append(seconds))
     service.run_forever()
 
@@ -411,6 +546,50 @@ def test_save_upload_file_removes_partial_file_on_size_limit(settings):
     assert leftovers == []
 
 
+def test_callback_payload_is_frozen_at_enqueue(job_repo, settings, monkeypatch):
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "frozen-callback.mp4")),
+        callback_url="http://callback.local/notify",
+    )
+    job = job_repo.create_job(payload)
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    assert service.run_once() is True
+
+    outbox = job_repo.get_callback_outbox(job.job_id)
+    assert len(outbox) == 1
+    frozen_payload = outbox[0].payload_json
+    with db_connection(settings) as connection:
+        connection.execute(
+            "UPDATE jobs SET error_message = ? WHERE job_id = ?",
+            ("mutated-after-enqueue", job.job_id),
+        )
+
+    sent_bodies: list[str] = []
+
+    class _SuccessClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            sent_bodies.append(kwargs["content"])
+            return SimpleNamespace(status_code=200, text="ok")
+
+    monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _SuccessClient)
+    callback_service = CallbackWorkerService(settings=settings, repository=job_repo, lock_owner="callback-frozen")
+    assert callback_service.run_once() is True
+    assert sent_bodies == [frozen_payload]
+
+
 def test_cleanup_stats(job_repo, settings):
     fallback_chain = JobRepository.default_fallback_chain("local_fallback")
     payload = JobCreate(
@@ -425,9 +604,124 @@ def test_cleanup_stats(job_repo, settings):
     cutoff = datetime.now(UTC) - timedelta(days=settings.file_retention_days + 1)
     with db_connection(settings) as connection:
         connection.execute(
-            "UPDATE jobs SET updated_at = ?, created_at = ? WHERE job_id = ?",
+            "UPDATE jobs SET status = 'succeeded', updated_at = ?, created_at = ? WHERE job_id = ?",
             (cutoff.isoformat(), cutoff.isoformat(), job.job_id),
         )
 
-    stats = job_repo.cleanup_expired_files(cutoff)
-    assert stats["candidate_jobs"] >= 1
+    output_path = settings.outbox_dir / f"{job.job_id}.mp4"
+    output_path.write_bytes(b"output")
+    os.utime(payload.input_path, (cutoff.timestamp(), cutoff.timestamp()))
+    os.utime(output_path, (cutoff.timestamp(), cutoff.timestamp()))
+    with db_connection(settings) as connection:
+        connection.execute(
+            "UPDATE jobs SET output_path = ?, updated_at = ? WHERE job_id = ?",
+            (str(output_path), cutoff.isoformat(), job.job_id),
+        )
+
+    report = run_file_cleanup(settings=settings, repository=job_repo, execute=True)
+    assert report["candidate_jobs"] >= 1
+
+    updated = job_repo.get_job(job.job_id)
+    assert updated is not None
+    assert updated.input_path == ""
+    assert updated.output_path is None
+    assert not Path(payload.input_path).exists()
+    assert not output_path.exists()
+
+
+def test_cleanup_preserves_shared_file_referenced_by_running_job(job_repo, settings):
+    shared_input = _prepare_video_file(settings.inbox_dir, "shared-running.mp4")
+    old_job = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="local_fallback",
+            fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+            input_path=str(shared_input),
+        )
+    )
+    running_job = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="local_fallback",
+            fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+            input_path=str(shared_input),
+        )
+    )
+    old_output = settings.outbox_dir / f"{old_job.job_id}.mp4"
+    old_output.write_bytes(b"artifact")
+    cutoff = datetime.now(UTC) - timedelta(days=settings.file_retention_days + 1)
+    old_ts = cutoff.timestamp()
+    os.utime(shared_input, (old_ts, old_ts))
+
+    with db_connection(settings) as connection:
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status = 'succeeded',
+                output_path = ?,
+                updated_at = ?,
+                created_at = ?
+            WHERE job_id = ?
+            """,
+            (str(old_output), cutoff.isoformat(), cutoff.isoformat(), old_job.job_id),
+        )
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status = 'running',
+                claimed_at = ?,
+                lock_owner = ?,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (datetime.now(UTC).isoformat(), "worker-1", datetime.now(UTC).isoformat(), running_job.job_id),
+        )
+    old_output.unlink()
+
+    report = run_file_cleanup(settings=settings, repository=job_repo, execute=True)
+    old_job_after = job_repo.get_job(old_job.job_id)
+    running_job_after = job_repo.get_job(running_job.job_id)
+
+    assert report["cleared_db_references"] >= 1
+    assert shared_input.exists()
+    assert old_job_after is not None
+    assert old_job_after.input_path == str(shared_input)
+    assert old_job_after.output_path is None
+    assert running_job_after is not None
+    assert running_job_after.input_path == str(shared_input)
+
+
+def test_callback_stale_claim_is_reclaimed(job_repo, settings):
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "callback-stale.mp4")),
+        callback_url="http://callback.local/notify",
+    )
+    job = job_repo.create_job(payload)
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    assert service.run_once() is True
+    outbox = job_repo.get_callback_outbox(job.job_id)
+    assert len(outbox) == 1
+
+    stale_at = datetime.now(UTC) - timedelta(seconds=settings.job_claim_timeout_seconds + 1)
+    with db_connection(settings) as connection:
+        connection.execute(
+            """
+            UPDATE callback_outbox
+            SET status = 'delivering',
+                claimed_at = ?,
+                lock_owner = ?
+            WHERE id = ?
+            """,
+            (stale_at.isoformat(), "stale-lock", outbox[0].id),
+        )
+
+    assert job_repo.reset_stale_callback_claims(settings.job_claim_timeout_seconds) == 1
+    refreshed = job_repo.get_callback_outbox(job.job_id)[0]
+    assert refreshed.status == "pending"
+    assert refreshed.lock_owner is None

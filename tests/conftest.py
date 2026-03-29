@@ -70,6 +70,7 @@ def clean_runtime_state(settings):
 
     with db_connection(settings) as connection:
         connection.execute("DELETE FROM callback_events")
+        connection.execute("DELETE FROM callback_outbox")
         connection.execute("DELETE FROM jobs")
 
     yield
