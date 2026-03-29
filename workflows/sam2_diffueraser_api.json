@@ -1,0 +1,12 @@
+{
+  "_meta": {
+    "name": "SAM2 + DiffuEraser",
+    "description": "Reference workflow placeholder for future local AI video watermark removal.",
+    "requires": [
+      "ComfyUI-VideoHelperSuite",
+      "ComfyUI-segment-anything-2",
+      "ComfyUI-DiffuEraser"
+    ],
+    "experimental": false
+  }
+}

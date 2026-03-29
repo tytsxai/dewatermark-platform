@@ -1,0 +1,31 @@
+models:
+  - name: diffueraser-unet-brushnet
+    required: true
+    description: DiffuEraser custom node core weights
+    expected_path: .runtime/ComfyUI/models/DiffuEraservae
+    source: https://huggingface.co/lixiaowen/diffuEraser
+  - name: sd-vae-ft-mse
+    required: true
+    description: Recommended VAE for DiffuEraser
+    expected_path: .runtime/ComfyUI/models/vae/sd-vae-ft-mse.safetensors
+    source: https://huggingface.co/stabilityai/sd-vae-ft-mse
+  - name: pcm-sd15-lora
+    required: true
+    description: PCM sd15 LoRA
+    expected_path: .runtime/ComfyUI/models/loras/pcm_sd15_smallcfg_2step_converted.safetensors
+    source: https://huggingface.co/wangfuyun/PCM_Weights/tree/main/sd15
+  - name: propainter
+    required: true
+    description: ProPainter prior model bundle
+    expected_path: .runtime/ComfyUI/models/DiffuEraservae/propainter
+    source: https://github.com/sczhou/ProPainter/releases/tag/v0.1.0
+  - name: clip-l
+    required: true
+    description: ComfyUI clip_l text encoder
+    expected_path: .runtime/ComfyUI/models/clip/clip_l.safetensors
+    source: https://huggingface.co/comfyanonymous/flux_text_encoders
+  - name: sam2
+    required: false
+    description: SAM2 weights, node may auto-download these
+    expected_path: .runtime/ComfyUI/models/sam2
+    source: https://huggingface.co/Kijai/sam2-safetensors

@@ -1,0 +1,19 @@
+runtime:
+  python: "3.12"
+repositories:
+  comfyui:
+    url: https://github.com/comfyanonymous/ComfyUI.git
+    ref: e4b0bb8305a4069ef7ff8396bfc6057c736ab95b
+    target: .runtime/ComfyUI
+  diffueraser:
+    url: https://github.com/smthemex/ComfyUI_DiffuEraser.git
+    ref: 0fda1392630af2a4ec39a9a39628aa1325897919
+    target: .runtime/ComfyUI/custom_nodes/ComfyUI-DiffuEraser
+  videohelpersuite:
+    url: https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+    ref: 993082e4f2473bf4acaf06f51e33877a7eb38960
+    target: .runtime/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite
+  sam2:
+    url: https://github.com/kijai/ComfyUI-segment-anything-2.git
+    ref: 0c35fff5f382803e2310103357b5e985f5437f32
+    target: .runtime/ComfyUI/custom_nodes/ComfyUI-segment-anything-2

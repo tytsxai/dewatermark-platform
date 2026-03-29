@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "name": "SAM2 + Fallback Inpaint",
+    "description": "Reference fallback workflow placeholder for local AI pipeline expansion.",
+    "requires": [
+      "ComfyUI-VideoHelperSuite",
+      "ComfyUI-segment-anything-2"
+    ],
+    "experimental": false
+  }
+}

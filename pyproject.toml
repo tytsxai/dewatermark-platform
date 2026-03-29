@@ -1,0 +1,35 @@
+[project]
+name = "dewatermark-platform"
+version = "0.1.0"
+description = "Local async dewatermark platform MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "httpx>=0.28.0",
+  "pyyaml>=6.0.2",
+  "python-multipart>=0.0.20",
+  "uvicorn>=0.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.0",
+]
+
+[project.scripts]
+dewatermark-api = "wm_platform.cli_api:main"
+dewatermark-worker = "wm_platform.cli_worker:main"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
