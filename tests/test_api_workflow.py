@@ -389,8 +389,131 @@ def test_comfy_probe_reports_missing_runtime(monkeypatch, tmp_path):
     assert comfy.runnable is False
     assert "missing" in comfy.message.lower() or "unreachable" in comfy.message.lower()
     assert comfy.details is not None
-    assert comfy.details["automatic_ai_pipeline"] == "not_wired"
+    assert comfy.details["automatic_ai_pipeline"] == "wired"
     assert comfy.details["workflow_ready"] is False
+
+
+def test_comfy_workflow_template_uses_api_prompt_format(settings):
+    payload = json.loads(settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    assert payload["1"]["class_type"] == "VHS_LoadVideoPath"
+    assert payload["11"]["class_type"] == "SaveVideo"
+
+
+def test_comfy_provider_runs_with_api_prompt(job_repo, settings, monkeypatch, tmp_path):
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    (comfy_dir / "main.py").write_text("print('comfy')\n", encoding="utf-8")
+    comfy_venv = tmp_path / ".venv" / "bin"
+    comfy_venv.mkdir(parents=True)
+    (comfy_venv / "python").write_text("", encoding="utf-8")
+
+    models_dir = comfy_dir / "models"
+    (models_dir / "vae").mkdir(parents=True)
+    (models_dir / "loras" / "sd15").mkdir(parents=True)
+    (models_dir / "clip").mkdir(parents=True)
+    (models_dir / "DiffuEraser" / "propainter").mkdir(parents=True)
+    (models_dir / "vae" / "sd-vae-ft-mse.safetensors").write_bytes(b"vae")
+    (models_dir / "loras" / "sd15" / "pcm_sd15_smallcfg_2step_converted.safetensors").write_bytes(b"lora")
+    (models_dir / "clip" / "clip_l.safetensors").write_bytes(b"clip")
+    (models_dir / "DiffuEraser" / "propainter" / "ProPainter.pth").write_bytes(b"propainter")
+    (models_dir / "DiffuEraser" / "propainter" / "recurrent_flow_completion.pth").write_bytes(b"flow")
+    (models_dir / "DiffuEraser" / "propainter" / "raft-things.pth").write_bytes(b"raft")
+
+    workflow_path = tmp_path / "sam2_diffueraser_api.json"
+    workflow_path.write_text(settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"), encoding="utf-8")
+
+    comfy_settings = replace(
+        settings,
+        comfyui_dir=comfy_dir,
+        comfyui_venv_dir=tmp_path / ".venv",
+        comfyui_models_dir=models_dir,
+        comfyui_diffueraser_workflow=workflow_path,
+        comfyui_api_url="http://127.0.0.1:8188",
+    )
+
+    job = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="comfy_diffueraser",
+            fallback_chain_json=JobRepository.default_fallback_chain("comfy_diffueraser"),
+            input_path=str(_prepare_video_file(settings.inbox_dir, "comfy-provider.mp4")),
+        )
+    )
+
+    captured_prompt: dict[str, object] = {}
+
+    class _Response:
+        def __init__(self, status_code=200, payload=None, text="", content=b""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+            self.content = content
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.text or f"http {self.status_code}")
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None, params=None):
+            if url.endswith("/system_stats"):
+                return _Response(payload={"devices": [{"type": "cpu"}]})
+            if f"/history/{job.job_id}" in url:
+                return _Response(
+                    payload={
+                        job.job_id: {
+                            "outputs": {
+                                "11": {
+                                    "images": [
+                                        {
+                                            "filename": "video_00001_.mp4",
+                                            "subfolder": "video",
+                                            "type": "output",
+                                        }
+                                    ]
+                                }
+                            },
+                            "status": {"status_str": "success", "completed": True, "messages": []},
+                        }
+                    }
+                )
+            if url.endswith("/view"):
+                assert params == {"filename": "video_00001_.mp4", "subfolder": "video", "type": "output"}
+                return _Response(content=b"fake-comfy-video")
+            raise AssertionError(f"unexpected GET {url}")
+
+        def post(self, url, json=None):
+            assert url.endswith("/prompt")
+            captured_prompt.update(json or {})
+            return _Response(payload={"prompt_id": job.job_id})
+
+    monkeypatch.setattr("wm_platform.provider_runtime.httpx.Client", _FakeClient)
+    provider = ProviderRuntime(comfy_settings).registry["comfy_diffueraser"]
+    result = provider.run(job)
+
+    assert Path(result["output_path"]).exists()
+    assert Path(result["output_path"]).read_bytes() == b"fake-comfy-video"
+    assert captured_prompt["prompt_id"] == job.job_id
+    prompt = captured_prompt["prompt"]
+    assert prompt["1"]["inputs"]["video"] == job.input_path
+    assert prompt["4"]["inputs"]["device"] == "cpu"
+    assert prompt["6"]["inputs"]["vae"] == "sd-vae-ft-mse.safetensors"
+    assert prompt["6"]["inputs"]["lora"] == "sd15/pcm_sd15_smallcfg_2step_converted.safetensors"
+    assert prompt["7"]["inputs"]["clip_name"] == "clip_l.safetensors"
+    assert prompt["11"]["inputs"]["filename_prefix"] == f"video/{job.job_id}"
 
 
 def test_provider_doctor_report_contains_probe_data(settings):

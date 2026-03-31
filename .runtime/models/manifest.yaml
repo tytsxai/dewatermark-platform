@@ -2,7 +2,7 @@ models:
   - name: diffueraser-unet-brushnet
     required: true
     description: DiffuEraser custom node core weights
-    expected_path: .runtime/ComfyUI/models/DiffuEraservae
+    expected_path: .runtime/ComfyUI/models/DiffuEraser
     source: https://huggingface.co/lixiaowen/diffuEraser
   - name: sd-vae-ft-mse
     required: true
@@ -17,7 +17,7 @@ models:
   - name: propainter
     required: true
     description: ProPainter prior model bundle
-    expected_path: .runtime/ComfyUI/models/DiffuEraservae/propainter
+    expected_path: .runtime/ComfyUI/models/DiffuEraser/propainter
     source: https://github.com/sczhou/ProPainter/releases/tag/v0.1.0
   - name: clip-l
     required: true

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import shutil
 import subprocess
@@ -10,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import httpx
+from wm_platform.comfy_runtime import start_comfyui, wait_for_comfyui
 from wm_platform.config import Settings
 from wm_platform.errors import AppError
 from wm_platform.models import JobRecord, ProviderProbeResult
@@ -61,12 +64,13 @@ class _UnavailableProvider(_BaseProvider):
 class _ComfyDiffuEraserProvider(_BaseProvider):
     def probe(self) -> ProviderProbeResult:
         installation_issues = self._missing_installation_bits()
-        workflow_ready = self.settings.comfyui_diffueraser_workflow.exists()
+        workflow_issue = self._workflow_issue()
+        workflow_ready = workflow_issue is None
         missing_models = self._missing_models()
         api_issue = self._api_issue()
         reasons = [*installation_issues]
-        if not workflow_ready:
-            reasons.append(f"missing workflow {self.settings.comfyui_diffueraser_workflow.name}")
+        if workflow_issue:
+            reasons.append(workflow_issue)
         if missing_models:
             reasons.append(f"missing models: {', '.join(missing_models[:3])}")
         if api_issue:
@@ -83,8 +87,10 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
             "missing_installation_bits": installation_issues,
             "missing_models": missing_models,
             "workflow_ready": workflow_ready,
+            "workflow_issue": workflow_issue,
+            "segmentation_repo": self.settings.comfyui_segmentation_repo,
             "api_issue": api_issue,
-            "automatic_ai_pipeline": "not_wired",
+            "automatic_ai_pipeline": "wired",
         }
         return ProviderProbeResult(
             name=self.name,
@@ -95,11 +101,14 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         )
 
     def run(self, job: JobRecord) -> dict[str, str]:
-        raise AppError(
-            "PROVIDER_NOT_AVAILABLE",
-            "comfy_diffueraser is not wired for execution yet; probe/doctor only in current stage",
-            503,
-        )
+        prompt = self._build_prompt(job)
+        with httpx.Client(timeout=None) as client:
+            device = self._ensure_comfyui_ready(client)
+            prompt = self._inject_prompt_runtime_values(prompt, job, device)
+            prompt_id = self._queue_prompt(client, prompt, job.job_id)
+            artifact = self._wait_for_prompt_result(client, prompt_id)
+            output_path = self._download_artifact(client, artifact, job)
+        return {"output_path": str(output_path)}
 
     def _missing_installation_bits(self) -> list[str]:
         repo_paths = expected_repo_paths(self.settings)
@@ -127,6 +136,19 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
                 missing.append(str(entry.get("name", expected_path.name)))
         return missing
 
+    def _workflow_issue(self) -> str | None:
+        if not self.settings.comfyui_diffueraser_workflow.exists():
+            return f"missing workflow {self.settings.comfyui_diffueraser_workflow.name}"
+        try:
+            prompt = json.loads(self.settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return f"invalid workflow json: {exc.msg}"
+        if not isinstance(prompt, dict) or not prompt:
+            return "workflow prompt is empty"
+        if any(not isinstance(node, dict) or "class_type" not in node for node in prompt.values()):
+            return "workflow prompt must use ComfyUI API export format"
+        return None
+
     def _api_issue(self) -> str | None:
         try:
             response = httpx.get(urljoin(self.settings.comfyui_api_url, "/system_stats"), timeout=2.0)
@@ -135,6 +157,192 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         if response.status_code != 200:
             return f"ComfyUI API returned {response.status_code}"
         return None
+
+    def _build_prompt(self, job: JobRecord) -> dict[str, dict[str, object]]:
+        workflow_issue = self._workflow_issue()
+        if workflow_issue:
+            raise AppError("PROVIDER_NOT_AVAILABLE", workflow_issue, 503)
+        template = json.loads(self.settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+        if not isinstance(template, dict):
+            raise AppError("PROVIDER_NOT_AVAILABLE", "workflow prompt is invalid", 503)
+
+        replacements: dict[str, object] = {
+            "__INPUT_VIDEO__": job.input_path,
+            "__SEG_REPO__": self.settings.comfyui_segmentation_repo,
+            "__OUTPUT_PREFIX__": f"video/{job.job_id}",
+            "__VAE_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "vae"],
+                candidates=["sd-vae-ft-mse.safetensors"],
+                label="vae",
+            ),
+            "__LORA_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "loras"],
+                candidates=["sd15/pcm_sd15_smallcfg_2step_converted.safetensors", "pcm_sd15_smallcfg_2step_converted.safetensors"],
+                label="lora",
+            ),
+            "__CLIP_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "text_encoders", self.settings.comfyui_models_dir / "clip"],
+                candidates=["clip_l.safetensors"],
+                label="clip",
+            ),
+            "__PROPAINTER_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "DiffuEraser"],
+                candidates=["propainter/ProPainter.pth", "ProPainter.pth"],
+                label="propainter",
+            ),
+            "__FLOW_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "DiffuEraser"],
+                candidates=["propainter/recurrent_flow_completion.pth", "recurrent_flow_completion.pth"],
+                label="flow",
+            ),
+            "__FIX_RAFT_MODEL__": self._resolve_model_input(
+                roots=[self.settings.comfyui_models_dir / "DiffuEraser"],
+                candidates=["propainter/raft-things.pth", "raft-things.pth"],
+                label="fix_raft",
+            ),
+            "__SEED__": int(hashlib.sha256(job.job_id.encode("utf-8")).hexdigest()[:8], 16),
+        }
+        return self._replace_placeholders(copy.deepcopy(template), replacements)
+
+    def _inject_prompt_runtime_values(
+        self,
+        prompt: dict[str, dict[str, object]],
+        job: JobRecord,
+        device: str,
+    ) -> dict[str, dict[str, object]]:
+        return self._replace_placeholders(
+            prompt,
+            {
+                "__PROP_DEVICE__": device,
+                "__INPUT_VIDEO__": job.input_path,
+                "__OUTPUT_PREFIX__": f"video/{job.job_id}",
+                "__SEG_REPO__": self.settings.comfyui_segmentation_repo,
+            },
+        )
+
+    def _resolve_model_input(self, roots: list[Path], candidates: list[str], label: str) -> str:
+        for root in roots:
+            if not root.exists():
+                continue
+            for candidate in candidates:
+                direct_path = root / candidate
+                if direct_path.exists():
+                    return direct_path.relative_to(root).as_posix()
+            for candidate in candidates:
+                candidate_name = Path(candidate).name
+                matches = sorted(path for path in root.rglob(candidate_name) if path.is_file())
+                if matches:
+                    return matches[0].relative_to(root).as_posix()
+        raise AppError("PROVIDER_NOT_AVAILABLE", f"missing required {label} model input", 503)
+
+    def _replace_placeholders(self, payload: object, replacements: dict[str, object]) -> object:
+        if isinstance(payload, str):
+            return replacements.get(payload, payload)
+        if isinstance(payload, list):
+            return [self._replace_placeholders(item, replacements) for item in payload]
+        if isinstance(payload, dict):
+            return {key: self._replace_placeholders(value, replacements) for key, value in payload.items()}
+        return payload
+
+    def _ensure_comfyui_ready(self, client: httpx.Client) -> str:
+        stats = self._system_stats(client)
+        if stats is None and self.settings.auto_start_comfyui:
+            start_comfyui(self.settings)
+            health = wait_for_comfyui(self.settings)
+            if not bool(health.get("ok")):
+                raise AppError("PROVIDER_NOT_AVAILABLE", "ComfyUI API is unavailable after auto-start", 503)
+            payload = health.get("payload")
+            if isinstance(payload, dict):
+                stats = payload
+        if stats is None:
+            raise AppError("PROVIDER_NOT_AVAILABLE", "ComfyUI API is unavailable", 503)
+
+        devices = stats.get("devices")
+        if isinstance(devices, list) and devices:
+            device_type = str(devices[0].get("type", "")).lower()
+            if device_type in {"cuda", "mps", "cpu"}:
+                return device_type
+        return "cpu"
+
+    def _system_stats(self, client: httpx.Client) -> dict[str, object] | None:
+        try:
+            response = client.get(urljoin(self.settings.comfyui_api_url, "/system_stats"), timeout=2.0)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _queue_prompt(self, client: httpx.Client, prompt: dict[str, dict[str, object]], prompt_id: str) -> str:
+        response = client.post(
+            urljoin(self.settings.comfyui_api_url, "/prompt"),
+            json={"prompt": prompt, "prompt_id": prompt_id, "client_id": prompt_id},
+        )
+        if response.status_code != 200:
+            detail = response.text[:1000] if response.text else "queue prompt failed"
+            raise AppError("PROVIDER_RUN_FAILED", f"ComfyUI prompt rejected: {detail}", 500)
+        payload = response.json()
+        queued_prompt_id = str(payload.get("prompt_id", prompt_id))
+        if not queued_prompt_id:
+            raise AppError("PROVIDER_RUN_FAILED", "ComfyUI prompt response missing prompt_id", 500)
+        return queued_prompt_id
+
+    def _wait_for_prompt_result(self, client: httpx.Client, prompt_id: str) -> dict[str, str]:
+        deadline = time.monotonic() + max(600.0, float(self.settings.job_claim_timeout_seconds) * 3.0)
+        while time.monotonic() < deadline:
+            response = client.get(urljoin(self.settings.comfyui_api_url, f"/history/{prompt_id}"))
+            if response.status_code == 200:
+                payload = response.json()
+                if isinstance(payload, dict) and prompt_id in payload:
+                    history_item = payload[prompt_id]
+                    artifact = self._extract_artifact(history_item)
+                    if artifact is not None:
+                        return artifact
+                    status = history_item.get("status", {})
+                    if isinstance(status, dict) and status.get("completed"):
+                        messages = status.get("messages") or []
+                        detail = "; ".join(str(item) for item in messages) or "ComfyUI execution completed without video output"
+                        if status.get("status_str") == "error":
+                            raise AppError("PROVIDER_RUN_FAILED", f"ComfyUI execution failed: {detail}", 500)
+                        raise AppError("PROVIDER_RUN_FAILED", detail, 500)
+            time.sleep(1.0)
+        raise AppError("PROVIDER_RUN_FAILED", "ComfyUI execution timed out", 500)
+
+    def _extract_artifact(self, history_item: object) -> dict[str, str] | None:
+        if not isinstance(history_item, dict):
+            return None
+        outputs = history_item.get("outputs", {})
+        if not isinstance(outputs, dict):
+            return None
+
+        ordered_nodes = []
+        if "11" in outputs:
+            ordered_nodes.append(outputs["11"])
+        ordered_nodes.extend(value for key, value in outputs.items() if key != "11")
+        for node_output in ordered_nodes:
+            if not isinstance(node_output, dict):
+                continue
+            for image in node_output.get("images", []):
+                if not isinstance(image, dict):
+                    continue
+                filename = str(image.get("filename", ""))
+                if Path(filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+                    continue
+                return {
+                    "filename": filename,
+                    "subfolder": str(image.get("subfolder", "")),
+                    "type": str(image.get("type", "output")),
+                }
+        return None
+
+    def _download_artifact(self, client: httpx.Client, artifact: dict[str, str], job: JobRecord) -> Path:
+        response = client.get(urljoin(self.settings.comfyui_api_url, "/view"), params=artifact)
+        if response.status_code != 200:
+            detail = response.text[:1000] if response.text else "artifact download failed"
+            raise AppError("PROVIDER_RUN_FAILED", f"failed to fetch ComfyUI artifact: {detail}", 500)
+        output_path = build_output_path(job.job_id, artifact["filename"], self.settings)
+        output_path.write_bytes(response.content)
+        return output_path
 
 
 class _LocalFallbackProvider(_BaseProvider):

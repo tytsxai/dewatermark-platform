@@ -37,6 +37,7 @@ class Settings:
     comfyui_models_dir: Path
     comfyui_workflows_dir: Path
     comfyui_diffueraser_workflow: Path
+    comfyui_segmentation_repo: str
     local_fallback_mode: str
     local_fallback_delogo_x: int | None
     local_fallback_delogo_y: int | None
@@ -105,6 +106,7 @@ def load_settings() -> Settings:
         comfyui_models_dir=comfyui_models_dir,
         comfyui_workflows_dir=comfyui_workflows_dir,
         comfyui_diffueraser_workflow=comfyui_diffueraser_workflow,
+        comfyui_segmentation_repo=os.getenv("DWM_COMFYUI_SEGMENTATION_REPO", "briaai/RMBG-2.0"),
         local_fallback_mode=os.getenv("DWM_LOCAL_FALLBACK_MODE", "ffmpeg_copy"),
         local_fallback_delogo_x=int(delogo_x) if delogo_x is not None else None,
         local_fallback_delogo_y=int(delogo_y) if delogo_y is not None else None,
