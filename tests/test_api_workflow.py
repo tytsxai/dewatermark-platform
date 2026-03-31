@@ -21,6 +21,7 @@ from wm_platform.doctor import provider_doctor_report
 from wm_platform.maintenance import run_file_cleanup
 from wm_platform.models import JobCreate
 from wm_platform.provider_runtime import ProviderRuntime
+from wm_platform.rate_limit import reset_submit_rate_limiter
 from wm_platform.repository import JobRepository
 from wm_platform.runtime_contract import expected_model_entries, expected_repo_paths
 from wm_platform.runtime_installer import RuntimeInstaller
@@ -198,12 +199,33 @@ def test_list_jobs_filters(api_client, auth_headers):
     assert response.status_code == 200
     data = response.json()
     assert "jobs" in data
+    assert data["page"] == 1
+    assert data["page_size"] == 50
     assert any(item["job_id"] == job["job_id"] for item in data["jobs"])
 
-    filtered = api_client.get("/v1/jobs?status=queued&provider=auto&media_type=video", headers=auth_headers)
+    filtered = api_client.get("/v1/jobs?status=queued&provider=auto&media_type=video&page=1&page_size=10", headers=auth_headers)
     assert filtered.status_code == 200
     filtered_jobs = filtered.json().get("jobs", [])
     assert any(item["job_id"] == job["job_id"] for item in filtered_jobs)
+
+
+def test_list_jobs_pagination(api_client, auth_headers):
+    for index in range(3):
+        _submit_job(api_client, auth_headers, f"page-{index}")
+
+    first_page = api_client.get("/v1/jobs?page=1&page_size=2", headers=auth_headers)
+    second_page = api_client.get("/v1/jobs?page=2&page_size=2", headers=auth_headers)
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+
+    first_data = first_page.json()
+    second_data = second_page.json()
+    assert len(first_data["jobs"]) == 2
+    assert first_data["has_more"] is True
+    assert second_data["page"] == 2
+    assert second_data["page_size"] == 2
+    assert len(second_data["jobs"]) == 1
 
 
 def test_job_result_endpoint(api_client, auth_headers, job_repo, settings):
@@ -284,7 +306,36 @@ def test_cancel_job_reports_conflict_when_repository_observes_running(auth_heade
         app.dependency_overrides.clear()
 
     assert response.status_code == 409
-    assert response.json()["error_code"] == "VALIDATION_ERROR"
+    assert response.json()["error_code"] == "JOB_NOT_CANCELABLE"
+
+
+def test_submit_job_rate_limit(settings, job_repo, auth_headers, monkeypatch):
+    app = create_app()
+    limited_settings = replace(settings, submit_rate_limit_count=1, submit_rate_limit_window_seconds=60.0)
+    reset_submit_rate_limiter()
+    monkeypatch.setattr("wm_platform.api_app.get_settings", lambda: limited_settings)
+    app.dependency_overrides[get_repository] = lambda: job_repo
+    try:
+        with TestClient(app) as client:
+            first = client.post(
+                "/v1/jobs",
+                headers={**auth_headers, "Idempotency-Key": "limited-1"},
+                files={"file": ("video.mp4", io.BytesIO(b"\x01" * 16), "video/mp4")},
+                data=_upload_payload({}),
+            )
+            second = client.post(
+                "/v1/jobs",
+                headers={**auth_headers, "Idempotency-Key": "limited-2"},
+                files={"file": ("video.mp4", io.BytesIO(b"\x02" * 16), "video/mp4")},
+                data=_upload_payload({}),
+            )
+    finally:
+        app.dependency_overrides.clear()
+        reset_submit_rate_limiter()
+
+    assert first.status_code in {200, 201}
+    assert second.status_code == 429
+    assert second.json()["error_code"] == "RATE_LIMITED"
 
 
 def test_provider_probe_shape(api_client, auth_headers):
@@ -347,9 +398,20 @@ def test_provider_doctor_report_contains_probe_data(settings):
     assert "providers" in report
     assert "comfyui_dir" in report
     assert "expected_repo_paths" in report
+    assert "system_dependencies" in report
     providers = report["providers"]
     assert isinstance(providers, list)
     assert any(item["name"] == "comfy_diffueraser" for item in providers)
+    system_dependencies = report["system_dependencies"]
+    assert system_dependencies["sqlite3"]["available"] is True
+    assert "git" in system_dependencies
+    assert "ffmpeg" in system_dependencies
+
+
+def test_get_job_reports_job_not_found(api_client, auth_headers):
+    response = api_client.get("/v1/jobs/job_missing", headers=auth_headers)
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "JOB_NOT_FOUND"
 
 
 def test_runtime_contract_files_are_visible(settings):

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, Header, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -23,6 +23,7 @@ from wm_platform.models import (
     ProviderProbeResult,
 )
 from wm_platform.provider_runtime import ProviderRuntime
+from wm_platform.rate_limit import enforce_submit_rate_limit
 from wm_platform.repository import JobRepository
 from wm_platform.storage import save_upload_file, validate_local_input_path
 
@@ -81,10 +82,12 @@ def create_app() -> FastAPI:
         priority: int = Form(default=0),
         file: UploadFile | None = File(default=None),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
         tenant_id: str = Depends(get_tenant_id),
         repository: JobRepository = Depends(get_repository),
     ) -> JobSubmitResponse:
         settings = get_settings()
+        enforce_submit_rate_limit(x_api_key or "", settings)
         if media_type != "video":
             raise AppError("MEDIA_TYPE_NOT_SUPPORTED", "only video is supported in MVP", 400)
         if provider not in ALLOWED_PROVIDERS:
@@ -140,7 +143,7 @@ def create_app() -> FastAPI:
     ) -> JobResponse:
         job = repository.get_job(job_id)
         if job is None or job.tenant_id != tenant_id:
-            raise AppError("FILE_NOT_FOUND", "job not found", 404)
+            raise AppError("JOB_NOT_FOUND", "job not found", 404)
         return JobResponse.from_record(job)
 
     @app.get("/v1/jobs", response_model=JobListResponse)
@@ -148,6 +151,8 @@ def create_app() -> FastAPI:
         status: str | None = None,
         provider: str | None = None,
         media_type: str | None = None,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=200),
         tenant_id: str = Depends(get_tenant_id),
         repository: JobRepository = Depends(get_repository),
     ) -> JobListResponse:
@@ -163,8 +168,15 @@ def create_app() -> FastAPI:
             status=status,
             provider=provider,
             media_type=media_type,
+            limit=page_size + 1,
+            offset=(page - 1) * page_size,
         )
-        return JobListResponse(jobs=[JobResponse.from_record(item) for item in records])
+        return JobListResponse(
+            jobs=[JobResponse.from_record(item) for item in records[:page_size]],
+            page=page,
+            page_size=page_size,
+            has_more=len(records) > page_size,
+        )
 
     @app.get("/v1/jobs/{job_id}/result", response_model=JobResultResponse)
     def get_job_result(
@@ -174,7 +186,7 @@ def create_app() -> FastAPI:
     ) -> JobResultResponse:
         job = repository.get_job(job_id)
         if job is None or job.tenant_id != tenant_id:
-            raise AppError("FILE_NOT_FOUND", "job not found", 404)
+            raise AppError("JOB_NOT_FOUND", "job not found", 404)
         if job.status == "succeeded" and (not job.output_path or not Path(job.output_path).exists()):
             raise AppError("ARTIFACT_MISSING", "job artifact missing", 410)
         return JobResultResponse(
@@ -192,9 +204,9 @@ def create_app() -> FastAPI:
     ) -> CancelJobResponse:
         job = repository.cancel_job(job_id=job_id, tenant_id=tenant_id)
         if job is None:
-            raise AppError("FILE_NOT_FOUND", "job not found", 404)
+            raise AppError("JOB_NOT_FOUND", "job not found", 404)
         if job.status != "canceled":
-            raise AppError("VALIDATION_ERROR", f"job in status '{job.status}' cannot be canceled", 409)
+            raise AppError("JOB_NOT_CANCELABLE", f"job in status '{job.status}' cannot be canceled", 409)
         return CancelJobResponse(job_id=job.job_id, status=job.status, updated_at=job.updated_at)
 
     @app.get("/v1/providers")

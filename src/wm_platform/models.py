@@ -81,6 +81,9 @@ class JobResponse(BaseModel):
 
 class JobListResponse(BaseModel):
     jobs: list[JobResponse]
+    page: int = 1
+    page_size: int = 50
+    has_more: bool = False
 
 
 class JobSubmitResponse(BaseModel):

@@ -202,9 +202,11 @@ class JobRepository:
         status: str | None = None,
         provider: str | None = None,
         media_type: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[JobRecord]:
         conditions = ["tenant_id = ?"]
-        params: list[str] = [tenant_id]
+        params: list[str | int] = [tenant_id]
         if status:
             conditions.append("status = ?")
             params.append(status)
@@ -216,11 +218,12 @@ class JobRepository:
             params.append(media_type)
 
         where_clause = " AND ".join(conditions)
+        sql = f"SELECT * FROM jobs WHERE {where_clause} ORDER BY created_at DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, max(0, offset)])
         with db_connection(self.settings) as connection:
-            rows = connection.execute(
-                f"SELECT * FROM jobs WHERE {where_clause} ORDER BY created_at DESC",
-                params,
-            ).fetchall()
+            rows = connection.execute(sql, params).fetchall()
         return [_parse_job(row) for row in rows]
 
     def reset_stale_claims(self, worker_timeout_seconds: int) -> int:

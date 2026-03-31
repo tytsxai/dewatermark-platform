@@ -25,6 +25,8 @@ class Settings:
     job_claim_heartbeat_seconds: float
     callback_retry_count: int
     callback_retry_delay_seconds: float
+    submit_rate_limit_count: int
+    submit_rate_limit_window_seconds: float
     provider_probe_cache_seconds: float
     provider_runtime_delay_seconds: float
     comfyui_api_url: str
@@ -91,6 +93,8 @@ def load_settings() -> Settings:
         job_claim_heartbeat_seconds=float(os.getenv("DWM_JOB_CLAIM_HEARTBEAT_SECONDS", "30.0")),
         callback_retry_count=int(os.getenv("DWM_CALLBACK_RETRY_COUNT", "3")),
         callback_retry_delay_seconds=float(os.getenv("DWM_CALLBACK_RETRY_DELAY_SECONDS", "1.0")),
+        submit_rate_limit_count=int(os.getenv("DWM_SUBMIT_RATE_LIMIT_COUNT", "60")),
+        submit_rate_limit_window_seconds=float(os.getenv("DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS", "60.0")),
         provider_probe_cache_seconds=float(os.getenv("DWM_PROVIDER_PROBE_CACHE_SECONDS", "10.0")),
         provider_runtime_delay_seconds=float(os.getenv("DWM_PROVIDER_RUNTIME_DELAY_SECONDS", "0.2")),
         comfyui_api_url=os.getenv("DWM_COMFYUI_API_URL", "http://127.0.0.1:8188"),
