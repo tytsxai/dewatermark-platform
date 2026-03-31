@@ -20,7 +20,7 @@ from wm_platform.db import db_connection
 from wm_platform.doctor import provider_doctor_report
 from wm_platform.maintenance import run_file_cleanup
 from wm_platform.models import JobCreate
-from wm_platform.provider_runtime import ProviderRuntime
+from wm_platform.provider_runtime import ProviderRuntime, QUALITY_PROFILES
 from wm_platform.rate_limit import reset_submit_rate_limiter
 from wm_platform.repository import JobRepository
 from wm_platform.runtime_contract import expected_model_entries, expected_repo_paths
@@ -452,6 +452,27 @@ def test_comfy_workflow_template_uses_api_prompt_format(settings):
     assert payload["11"]["class_type"] == "SaveVideo"
 
 
+def test_comfy_probe_selects_corner_hq_workflow(settings):
+    runtime = ProviderRuntime(replace(settings, quality_mode="corner_hq"), repository=None)
+    comfy = runtime.registry["comfy_diffueraser"].probe()
+    assert comfy.details is not None
+    assert comfy.details["quality_profile"] == "corner_hq"
+    assert comfy.details["workflow_name"] == "corner_watermark_hq.json"
+
+
+def test_apply_quality_profile_uses_class_type_not_node_id(settings):
+    provider = ProviderRuntime(replace(settings, quality_mode="quality"), repository=None).registry["comfy_diffueraser"]
+    prompt = json.loads(settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+    prompt["50"] = prompt.pop("5")
+    prompt["90"] = prompt.pop("9")
+
+    updated = provider._apply_quality_profile(prompt, QUALITY_PROFILES["quality"])
+
+    assert updated["50"]["inputs"]["mask_dilation_iter"] == 3
+    assert updated["50"]["inputs"]["subvideo_length"] == 100
+    assert updated["90"]["inputs"]["steps"] == 7
+
+
 def test_comfy_provider_runs_with_api_prompt(job_repo, settings, monkeypatch, tmp_path):
     comfy_dir = tmp_path / "ComfyUI"
     comfy_dir.mkdir()
@@ -566,6 +587,27 @@ def test_comfy_provider_runs_with_api_prompt(job_repo, settings, monkeypatch, tm
     assert prompt["6"]["inputs"]["lora"] == "sd15/pcm_sd15_smallcfg_2step_converted.safetensors"
     assert prompt["7"]["inputs"]["clip_name"] == "clip_l.safetensors"
     assert prompt["11"]["inputs"]["filename_prefix"] == f"video/{job.job_id}"
+
+
+def test_record_run_metadata_logs_failure(job_repo, settings, caplog):
+    class _FailingRepository:
+        def record_run_metadata(self, metadata):
+            raise RuntimeError("db write failed")
+
+    job = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="comfy_diffueraser",
+            fallback_chain_json=JobRepository.default_fallback_chain("comfy_diffueraser"),
+            input_path=str(_prepare_video_file(settings.inbox_dir, "metadata-log.mp4")),
+        )
+    )
+    provider = ProviderRuntime(settings, repository=_FailingRepository()).registry["comfy_diffueraser"]
+
+    provider._record_run_metadata(job, "cpu")
+
+    assert "failed to record run metadata" in caplog.text
 
 
 def test_provider_doctor_report_contains_probe_data(settings):
