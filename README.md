@@ -189,6 +189,7 @@ uv run pytest
 - callback 重试事件落库
 - `GET /v1/jobs` / `result` / `cancel`
 - `comfy_diffueraser` probe 缺失运行时提示
+- `comfy_diffueraser` API prompt 执行链
 
 ## AI Provider Direction
 
@@ -206,7 +207,14 @@ uv run pytest
 - 检查 `models`
 - 检查 `ComfyUI API`
 
-但还没有接入真正执行链，所以它现在属于“doctor/probe 已落地，run 仍待接入”的状态。
+当前已经接入最小可执行链：
+
+- 读取 `workflows/sam2_diffueraser_api.json` API prompt 模板
+- 向 ComfyUI `/prompt` 提交任务
+- 轮询 `/history/{prompt_id}`
+- 从 `/view` 拉回导出视频并落到 `storage/outbox/`
+
+当前默认工作流会直接基于输入视频生成 mask，不要求用户额外上传 mask。
 
 ## Runtime Contract
 
@@ -220,7 +228,7 @@ uv run pytest
 
 - 要 clone 的 ComfyUI / custom nodes 版本
 - 必需模型清单
-- 当前 AI 工作流模板占位
+- 当前 AI 工作流 API 模板
 
 后续真正安装本地 AI 运行时，应以这三份文件为准，而不是继续从旧仓库人工抄配置。
 
@@ -229,7 +237,8 @@ uv run pytest
 1. `--runtime-plan`
 2. `--install-runtime --repos-only`
 3. 手工补模型到 `.runtime/ComfyUI/models`
-4. 再处理 ComfyUI API 启动和真正执行链
+4. 启动 ComfyUI
+5. 直接提交视频任务验证 `comfy_diffueraser`
 
 `/v1/providers` 现在会把 `comfy_diffueraser` 的缺失项结构化返回，便于直接定位：
 
@@ -238,3 +247,8 @@ uv run pytest
 - 缺失关键模型
 - 工作流模板是否存在
 - `ComfyUI API` 是否可达
+
+补充：
+
+- `DWM_COMFYUI_SEGMENTATION_REPO` 默认是 `briaai/RMBG-2.0`
+- 如果本地已有可用的 RMBG/BiRefNet 仓库路径，也可以把这个变量改成本地模型目录

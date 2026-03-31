@@ -296,6 +296,6 @@ MVP 必须满足：
   - worker
   - provider probe / doctor
   - ComfyUI runtime contract
-- 当前尚未完成的核心项是：
+- 当前尚未完成的核心项已经收敛为：
   - `comfy_diffueraser` 模型安装
-  - 自动 AI 执行链真正接入
+  - 自动 AI 效果与性能调优

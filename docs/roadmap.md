@@ -43,8 +43,8 @@
 
 - `local_fallback` 已可跑
 - `comfy_diffueraser` 的 runtime contract / doctor / probe 已落地
-- `comfy_diffueraser` 的运行时框架已基本就绪
-- 当前主要缺口已经收敛到模型和真正执行链
+- `comfy_diffueraser` 已接入 ComfyUI API 执行链
+- 当前主要缺口已经收敛到模型就位和实际效果调优
 
 ## 阶段 3
 
@@ -116,3 +116,9 @@
 - 用户只上传视频
 - 系统自动处理
 - 不要求用户提供水印位置
+
+当前阶段状态更新：
+
+- API prompt 模板已落地
+- Worker 已能调用 ComfyUI `/prompt` / `/history` / `/view`
+- `comfy_diffueraser` 在模型齐备、ComfyUI 可用时可直接执行
