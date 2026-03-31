@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>项目汇报：独立本地去水印平台</title>
+    <meta name="description" content="独立本地优先级异步视频去水印平台项目汇报与技术解析">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0a0a0f;
+            --bg-surface: rgba(255, 255, 255, 0.03);
+            --bg-surface-hover: rgba(255, 255, 255, 0.08);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0b0;
+            --accent-primary: #6366f1;
+            --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Glassmorphism utility */
+        .glass {
+            background: var(--bg-surface);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Nav */
+        nav {
+            padding: 24px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 64px;
+        }
+
+        nav h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        /* Hero */
+        .hero {
+            text-align: center;
+            margin-bottom: 80px;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -100px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(10, 10, 15, 0) 70%);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .hero h2 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 24px;
+            letter-spacing: -0.03em;
+        }
+
+        .hero h2 span {
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Metrics */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 24px;
+            margin-bottom: 80px;
+        }
+
+        .metric-card {
+            padding: 32px;
+            text-align: center;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .metric-card:hover {
+            transform: translateY(-8px);
+            background: var(--bg-surface-hover);
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 8px;
+        }
+
+        .metric-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Section Settings */
+        section {
+            margin-bottom: 80px;
+        }
+
+        .section-title {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 40px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .section-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-color);
+        }
+
+        /* Architecture */
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            align-items: center;
+        }
+
+        .arch-content p {
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            font-size: 1.125rem;
+        }
+
+        .arch-list {
+            list-style: none;
+            margin-top: 24px;
+        }
+
+        .arch-list li {
+            padding: 16px;
+            margin-bottom: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 8px;
+            border-left: 4px solid var(--accent-primary);
+            font-weight: 500;
+            color: #e2e8f0;
+        }
+
+        .arch-visual {
+            padding: 40px;
+            position: relative;
+        }
+
+        .node {
+            padding: 16px 24px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 16px;
+            text-align: center;
+            font-weight: 600;
+            position: relative;
+            z-index: 2;
+        }
+
+        .node.accent {
+            background: rgba(99, 102, 241, 0.1);
+            border-color: rgba(99, 102, 241, 0.4);
+            color: #a5b4fc;
+        }
+
+        /* Roadmap Timeline */
+        .timeline {
+            position: relative;
+            padding-left: 32px;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--border-color);
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 48px;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -37px;
+            top: 4px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--bg-base);
+            border: 2px solid var(--accent-primary);
+            transition: all 0.3s;
+        }
+
+        .timeline-item.completed::before {
+            background: var(--accent-primary);
+            box-shadow: 0 0 12px var(--accent-primary);
+        }
+
+        .timeline-item.active::before {
+            border-color: var(--warning);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+        }
+
+        .timeline-date {
+            font-size: 0.875rem;
+            color: var(--accent-primary);
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .timeline-item.active .timeline-date {
+            color: var(--warning);
+        }
+
+        .timeline-content {
+            padding: 24px;
+            transition: transform 0.3s;
+        }
+        
+        .timeline-content:hover {
+            transform: translateX(8px);
+        }
+
+        .timeline-content h3 {
+            font-size: 1.25rem;
+            margin-bottom: 12px;
+        }
+
+        .timeline-content p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        /* Next Steps */
+        .next-steps {
+            background: linear-gradient(180deg, rgba(99, 102, 241, 0.05) 0%, transparent 100%);
+            border-top: 1px solid rgba(99, 102, 241, 0.2);
+            padding: 64px 0;
+            text-align: center;
+        }
+
+        .action-card {
+            display: inline-block;
+            text-align: left;
+            padding: 32px;
+            margin-top: 32px;
+            max-width: 600px;
+        }
+
+        .action-card h4 {
+            font-size: 1.25rem;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+
+        .action-card ul {
+            color: var(--text-secondary);
+            padding-left: 20px;
+        }
+
+        .action-card li {
+            margin-bottom: 8px;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        @media (max-width: 768px) {
+            .hero h2 { font-size: 2.5rem; }
+            .arch-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <h1>Dewatermark Platform</h1>
+            <div class="status-badge">Phase 5 (MVP) 完成</div>
+        </nav>
+
+        <section class="hero">
+            <h2>独立本地 <span>去水印平台</span></h2>
+            <p>基于异步任务架构、支持多后端 Provider 路由的独立 AI 视频处理系统。</p>
+        </section>
+
+        <section class="metrics-grid">
+            <div class="metric-card glass">
+                <div class="metric-value">100%</div>
+                <div class="metric-label">解耦纯净架构</div>
+            </div>
+            <div class="metric-card glass">
+                <div class="metric-value">API</div>
+                <div class="metric-label">标准 HTTP 交互与 Webhook 回调</div>
+            </div>
+            <div class="metric-card glass">
+                <div class="metric-value">AI</div>
+                <div class="metric-label">深度集成 ComfyUI 主链</div>
+            </div>
+        </section>
+
+        <section>
+            <h2 class="section-title">核心架构解析</h2>
+            <div class="arch-grid">
+                <div class="arch-content">
+                    <p>一期采用最简高可用架构，旨在将复杂深度学习推理与高并发 API 层隔离。拒绝过度设计，专注于提供稳定的本地化异步任务能力。</p>
+                    <p>系统已完全脱离旧有 OpenFang/Shipinbot 运行时路径进行独立部署和解耦。</p>
+                    <ul class="arch-list">
+                        <li><strong>FastAPI 前台：</strong>负责接受上传、校验 API Key、写入 SQLite 投递任务以及幂等处理。</li>
+                        <li><strong>Worker 后台轮询：</strong>抢占式并发任务锁处理，具备状态更新与回调自动重试机制。</li>
+                        <li><strong>Provider 适配器：</strong>支持 `comfy_diffueraser` (AI 主链) 和 `local_fallback` (FFmpeg 复制/保活)，内置完善降级链。</li>
+                    </ul>
+                </div>
+                <div class="arch-visual glass">
+                    <div class="node">Client (Web/Bot)</div>
+                    <div style="text-align: center; color: var(--border-color); margin-bottom: 16px;">↓ HTTP POST /v1/jobs</div>
+                    <div class="node accent">FastAPI Service</div>
+                    <div style="text-align: center; color: var(--border-color); margin-bottom: 16px;">↓ SQLite Task Queue & Inbox</div>
+                    <div class="node accent">Python Worker Polling</div>
+                    <div style="text-align: center; color: var(--border-color); margin-bottom: 16px;">↓ Provider Adapter (`auto`)</div>
+                    <div style="display: flex; gap: 16px; margin-bottom: 16px;">
+                        <div class="node" style="flex: 1; font-size: 0.85rem;">comfy_diffueraser (AI)</div>
+                        <div class="node" style="flex: 1; opacity: 0.7; font-size: 0.85rem;">local_fallback</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2 class="section-title">项目演进 Roadmap</h2>
+            <div class="timeline">
+                <div class="timeline-item completed">
+                    <div class="timeline-date">阶段 0 - 阶段 1</div>
+                    <div class="timeline-content glass">
+                        <h3>系统骨架与需求确立</h3>
+                        <p>明确独立本地化系统边界。建立 FastAPI + SQLite + Worker polling 的最小可执行闭环，跑通 Fake Provider 任务全流程及状态查询。</p>
+                    </div>
+                </div>
+
+                <div class="timeline-item completed">
+                    <div class="timeline-date">阶段 2 - 阶段 3</div>
+                    <div class="timeline-content glass">
+                        <h3>真实 Provider 接入与动态路由</h3>
+                        <p>实现 `local_fallback` 保活通道，完成 `/v1/providers` 状态探活，并实现 `provider=auto` 下的自动降级策略。</p>
+                    </div>
+                </div>
+
+                <div class="timeline-item completed">
+                    <div class="timeline-date">阶段 4 - 阶段 5</div>
+                    <div class="timeline-content glass">
+                        <h3>生产就绪保障与 AI 运行环境</h3>
+                        <p>完善 Webhook Callback 失败重试、文件清理机制。落实 ComfyUI `doctor / probe` 门禁系统及运行时合约 (Runtime Contract)，全链路探测无缝闭合。</p>
+                    </div>
+                </div>
+
+                <div class="timeline-item active">
+                    <div class="timeline-date">阶段 6 (当前执行)</div>
+                    <div class="timeline-content glass" style="border-color: rgba(245, 158, 11, 0.3);">
+                        <h3>本地 AI 主链装配与效果调优</h3>
+                        <p>安装与准备所需模型 (`manifest.yaml`)，正式打通 `comfy_diffueraser` 自动遮罩检测与去水印链路，迈向全自动化。</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <div class="next-steps">
+        <div class="container">
+            <h2 style="font-size: 2rem; margin-bottom: 16px;">下一步核心冲刺行动</h2>
+            <p style="color: var(--text-secondary); font-size: 1.125rem;">全面推进 "零人工介入" 的自动视频去水印目标</p>
+            
+            <div class="action-card glass">
+                <h4>即将执行的操作清单</h4>
+                <ul>
+                    <li>通过 `dewatermark-worker --install-runtime` 补全并组装基础环境。</li>
+                    <li>挂载并验证 `RMBG-2.0` 等基于 Sam2 的关键模型到 `.runtime`。</li>
+                    <li>启动本地 ComfyUI 服务完成 API prompt (`/prompt` , `/history`) 握手。</li>
+                    <li>针对多分辨率及视频编码进行 AI 产物性能评测与优化。</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 去水印平台 (Dewatermark Platform). All constraints strictly enforced.</p>
+        </div>
+    </footer>
+</body>
+</html>
