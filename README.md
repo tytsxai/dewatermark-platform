@@ -1,6 +1,10 @@
 # 去水印平台
 
-一个独立的本地去水印服务仓库。
+一个独立的、本地优先的异步视频去水印平台。
+
+[GitHub Repository](https://github.com/tytsxai/dewatermark-platform)
+
+当前仓库已按开源项目方式整理，采用 [MIT License](./LICENSE)。
 
 当前结论很明确：
 
@@ -15,7 +19,7 @@
 - 独立 worker
 - 不和现有业务运行时路径混用
 
-## 当前目标
+## 项目目标
 
 先把需求和边界钉死，再开始编码。
 
@@ -56,7 +60,14 @@ storage/outbox/       本地产物目录
 - `docs/roadmap.md`
 - `项目启动提示词.md`
 
-## Local Workflow
+## 开源说明
+
+- License: `MIT`
+- Issues / PR: welcome
+- 当前阶段更适合单机、本地 AI 运行时、MVP 骨架和执行链演进
+- 不承诺即开即用的商业级效果，重点是可跑、可查、可扩展
+
+## 快速开始
 
 1. Install dependencies:
    ```sh
@@ -103,21 +114,21 @@ storage/outbox/       本地产物目录
    uv run dewatermark-worker --comfyui-health
    ```
 
-The API startup creates `storage/app.db`, ensures `storage/inbox/` and `storage/outbox/`, and seeds the default API key.
+API 启动时会自动创建 `storage/app.db`、`storage/inbox/`、`storage/outbox/`，并写入默认 API key。
 
-## Default Credentials
+## 默认凭据
 
 - Default tenant: `local-dev`
 - Default API key: `dev-secret-key`
 - Header name: `X-API-Key`
 
-## Storage Layout
+## 存储布局
 
 - `storage/inbox/`: uploaded inputs
 - `storage/outbox/`: worker outputs
 - `storage/app.db`: SQLite job store
 
-## Example Workflow
+## 调用示例
 
 Submit a job:
 
@@ -142,7 +153,7 @@ Check job status:
 curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 ```
 
-## Platform Endpoints
+## 平台接口
 
 - `GET /v1/jobs`: list jobs filtered by tenant and optional `status`, `provider`, `media_type`, `page`, `page_size`
 - `GET /v1/jobs/{job_id}`: get status (existing)
@@ -150,9 +161,9 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 - `POST /v1/jobs/{job_id}/cancel`: cancel queued jobs only
 - `GET /v1/providers`: check provider health and capabilities
 
-## Environment Variables
+## 环境变量
 
-Copy `.env.example` and adjust if needed before running, or set the variables listed below before starting API/worker.
+启动前可以复制 `.env.example`，或者直接设置以下环境变量。
 
 - `DWM_DEFAULT_TENANT_ID` / `DWM_DEFAULT_API_KEY`: API key pair seeded on startup
 - `DWM_STORAGE_ROOT`: storage directory that contains `inbox`, `outbox`, `app.db`
@@ -173,7 +184,7 @@ FFmpeg must be installed and on `PATH` for the local fallback provider to work (
 
 当前推荐的本地 AI 运行时目录是仓库内的 `.runtime/ComfyUI`，不要把 Electron 客户端缓存目录误当成真正的 Comfy 推理运行时。
 
-## Testing
+## 测试
 
 ```sh
 uv run pytest
@@ -191,7 +202,7 @@ uv run pytest
 - `comfy_diffueraser` probe 缺失运行时提示
 - `comfy_diffueraser` API prompt 执行链
 
-## AI Provider Direction
+## AI 主链说明
 
 当前主目标不是让用户手工给水印框，而是把 `comfy_diffueraser` 补成真正的本地 AI 主链。
 
@@ -252,3 +263,17 @@ uv run pytest
 
 - `DWM_COMFYUI_SEGMENTATION_REPO` 默认是 `briaai/RMBG-2.0`
 - 如果本地已有可用的 RMBG/BiRefNet 仓库路径，也可以把这个变量改成本地模型目录
+
+## 已知限制
+
+- 当前主能力聚焦视频，图片能力仍保留为后续扩展位
+- 效果和吞吐主要受 ComfyUI、显存、模型文件、输入视频分辨率影响
+- SQLite 适合单机 MVP，不适合高并发生产集群
+
+## 贡献
+
+提交代码前建议先看 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
+## 许可证
+
+本项目使用 [MIT License](./LICENSE)。
