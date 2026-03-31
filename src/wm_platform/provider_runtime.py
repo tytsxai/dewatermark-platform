@@ -505,19 +505,20 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         return None
 
     def _download_artifact(self, client: httpx.Client, artifact: dict[str, str], job: JobRecord) -> Path:
-        response = client.get(urljoin(self.settings.comfyui_api_url, "/view"), params=artifact)
-        if response.status_code != 200:
-            detail = response.text[:1000] if response.text else "artifact download failed"
-            raise AppError("PROVIDER_RUN_FAILED", f"failed to fetch ComfyUI artifact: {detail}", 500)
         output_path = build_output_path(job.job_id, artifact["filename"], self.settings)
-        # Atomic write: write to temp file first, then rename
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = output_path.with_suffix(f"{output_path.suffix}.tmp.{job.job_id}")
         try:
-            temp_path.write_bytes(response.content)
+            with client.stream("GET", urljoin(self.settings.comfyui_api_url, "/view"), params=artifact) as response:
+                if response.status_code != 200:
+                    detail = response.text[:1000] if response.text else "artifact download failed"
+                    raise AppError("PROVIDER_RUN_FAILED", f"failed to fetch ComfyUI artifact: {detail}", 500)
+                with temp_path.open("wb") as output:
+                    for chunk in response.iter_bytes():
+                        if chunk:
+                            output.write(chunk)
             temp_path.rename(output_path)
         except Exception:
-            # Clean up temp file on failure
             if temp_path.exists():
                 temp_path.unlink()
             raise
