@@ -124,7 +124,7 @@ def test_worker_marks_job_succeeded(job_repo, settings):
         input_path=str(_prepare_video_file(settings.inbox_dir, "worker-sample.mp4")),
     )
     job = job_repo.create_job(payload)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
     updated = job_repo.get_job(job.job_id)
     assert updated is not None
@@ -141,7 +141,7 @@ def test_provider_auto_chain():
 
 def test_local_fallback_copy_mode_does_not_invoke_ffmpeg(job_repo, settings, monkeypatch):
     copy_settings = replace(settings, local_fallback_mode="ffmpeg_copy")
-    provider = ProviderRuntime(copy_settings).registry["local_fallback"]
+    provider = ProviderRuntime(copy_settings, repository=job_repo).registry["local_fallback"]
     job = job_repo.create_job(
         JobCreate(
             tenant_id=settings.default_tenant_id,
@@ -191,7 +191,7 @@ def test_job_worker_enqueues_callback_without_sending(job_repo, settings, monkey
             raise AssertionError("job worker should not dispatch callbacks inline")
 
     monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _UnexpectedClient)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
 
     outbox = job_repo.get_callback_outbox(job.job_id)
@@ -213,7 +213,7 @@ def test_callback_worker_retry_records_events(job_repo, settings, monkeypatch):
         callback_secret="secret",
     )
     job = job_repo.create_job(payload)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
 
     attempts = {"count": 0}
@@ -291,7 +291,7 @@ def test_job_result_endpoint(api_client, auth_headers, job_repo, settings):
         input_path=str(_prepare_video_file(settings.inbox_dir, "result-sample.mp4")),
     )
     job = job_repo.create_job(payload)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
 
     response = api_client.get(f"/v1/jobs/{job.job_id}/result", headers=auth_headers)
@@ -413,7 +413,7 @@ def test_provider_probe_is_cached(settings, monkeypatch):
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr("wm_platform.provider_runtime.httpx.get", _fake_get)
-    runtime = ProviderRuntime(replace(settings, provider_probe_cache_seconds=60.0))
+    runtime = ProviderRuntime(replace(settings, provider_probe_cache_seconds=60.0), repository=None)
     runtime.probe_all()
     runtime.probe_all()
     assert calls["count"] <= 1
@@ -435,7 +435,7 @@ def test_comfy_probe_reports_missing_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("DWM_COMFYUI_WORKFLOWS_DIR", str(tmp_path / "workflows"))
     monkeypatch.setenv("DWM_COMFYUI_DIFFUERASER_WORKFLOW", str(tmp_path / "workflows" / "sam2_diffueraser_api.json"))
     settings = load_settings()
-    probe_map = {item.name: item for item in ProviderRuntime(settings).probe_all()}
+    probe_map = {item.name: item for item in ProviderRuntime(settings, repository=None).probe_all()}
     comfy = probe_map["comfy_diffueraser"]
     assert comfy.installed is False
     assert comfy.runnable is False
@@ -553,7 +553,7 @@ def test_comfy_provider_runs_with_api_prompt(job_repo, settings, monkeypatch, tm
             return _Response(payload={"prompt_id": job.job_id})
 
     monkeypatch.setattr("wm_platform.provider_runtime.httpx.Client", _FakeClient)
-    provider = ProviderRuntime(comfy_settings).registry["comfy_diffueraser"]
+    provider = ProviderRuntime(comfy_settings, repository=job_repo).registry["comfy_diffueraser"]
     result = provider.run(job)
 
     assert Path(result["output_path"]).exists()
@@ -698,7 +698,7 @@ def test_callback_retry_count_respects_single_attempt(job_repo, settings, monkey
             attempts["count"] += 1
             raise RuntimeError("callback down")
 
-    service = WorkerService(settings=once_settings, repository=once_repo, providers=ProviderRuntime(once_settings))
+    service = WorkerService(settings=once_settings, repository=once_repo, providers=ProviderRuntime(once_settings, repository=once_repo))
     assert service.run_once() is True
 
     monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _FailingClient)
@@ -793,7 +793,7 @@ def test_callback_payload_is_frozen_at_enqueue(job_repo, settings, monkeypatch):
         callback_url="http://callback.local/notify",
     )
     job = job_repo.create_job(payload)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
 
     outbox = job_repo.get_callback_outbox(job.job_id)
@@ -940,7 +940,7 @@ def test_callback_stale_claim_is_reclaimed(job_repo, settings):
         callback_url="http://callback.local/notify",
     )
     job = job_repo.create_job(payload)
-    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings))
+    service = WorkerService(settings=settings, repository=job_repo, providers=ProviderRuntime(settings, repository=job_repo))
     assert service.run_once() is True
     outbox = job_repo.get_callback_outbox(job.job_id)
     assert len(outbox) == 1

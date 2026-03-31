@@ -141,3 +141,20 @@ class CallbackOutboxRecord(BaseModel):
     lock_owner: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RunMetadataRecord(BaseModel):
+    """运行元数据记录"""
+    id: int
+    job_id: str
+    workflow_name: str | None = None
+    quality_profile: str | None = None
+    steps: int | None = None
+    subvideo_length: int | None = None
+    neighbor_length: int | None = None
+    mask_dilation_iter: int | None = None
+    device: str | None = None
+    seed: int | None = None
+    scene_type: str | None = None
+    confidence_level: str | None = None
+    created_at: datetime

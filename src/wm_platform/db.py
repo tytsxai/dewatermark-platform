@@ -103,6 +103,24 @@ ON callback_outbox(job_id);
 
 CREATE INDEX IF NOT EXISTS idx_callback_outbox_status_lock_claimed
 ON callback_outbox(status, lock_owner, claimed_at);
+CREATE TABLE IF NOT EXISTS run_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    workflow_name TEXT,
+    quality_profile TEXT,
+    steps INTEGER,
+    subvideo_length INTEGER,
+    neighbor_length INTEGER,
+    mask_dilation_iter INTEGER,
+    device TEXT,
+    seed INTEGER,
+    scene_type TEXT,
+    confidence_level TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_metadata_job_id
+ON run_metadata(job_id);
 """
 
 

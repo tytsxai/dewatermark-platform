@@ -45,6 +45,7 @@ class Settings:
     local_fallback_delogo_w: int | None
     local_fallback_delogo_h: int | None
     file_retention_days: int
+    quality_mode: str
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -115,4 +116,5 @@ def load_settings() -> Settings:
         local_fallback_delogo_w=int(delogo_w) if delogo_w is not None else None,
         local_fallback_delogo_h=int(delogo_h) if delogo_h is not None else None,
         file_retention_days=int(os.getenv("DWM_FILE_RETENTION_DAYS", "7")),
+        quality_mode=os.getenv("DWM_QUALITY_MODE", "balanced"),
     )

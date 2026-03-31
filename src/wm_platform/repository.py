@@ -9,7 +9,7 @@ from typing import Any
 
 from wm_platform.config import Settings
 from wm_platform.db import db_connection, sha256_text
-from wm_platform.models import CallbackOutboxRecord, CallbackPayload, JobCreate, JobRecord
+from wm_platform.models import CallbackOutboxRecord, CallbackPayload, JobCreate, JobRecord, RunMetadataRecord
 
 
 def utc_now() -> datetime:
@@ -722,3 +722,56 @@ class JobRepository:
         else:
             chain = [provider_requested]
         return json.dumps(chain)
+
+    def record_run_metadata(self, metadata: RunMetadataRecord) -> None:
+        """记录运行元数据"""
+        with db_connection(self.settings) as connection:
+            connection.execute(
+                """
+                INSERT INTO run_metadata (
+                    job_id, workflow_name, quality_profile, steps,
+                    subvideo_length, neighbor_length, mask_dilation_iter,
+                    device, seed, scene_type, confidence_level, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    metadata.job_id,
+                    metadata.workflow_name,
+                    metadata.quality_profile,
+                    metadata.steps,
+                    metadata.subvideo_length,
+                    metadata.neighbor_length,
+                    metadata.mask_dilation_iter,
+                    metadata.device,
+                    metadata.seed,
+                    metadata.scene_type,
+                    metadata.confidence_level,
+                    metadata.created_at.isoformat(),
+                ),
+            )
+
+    def get_run_metadata(self, job_id: str) -> RunMetadataRecord | None:
+        """获取运行元数据"""
+        with db_connection(self.settings) as connection:
+            row = connection.execute(
+                "SELECT * FROM run_metadata WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RunMetadataRecord(
+            id=row["id"],
+            job_id=row["job_id"],
+            workflow_name=row["workflow_name"],
+            quality_profile=row["quality_profile"],
+            steps=row["steps"],
+            subvideo_length=row["subvideo_length"],
+            neighbor_length=row["neighbor_length"],
+            mask_dilation_iter=row["mask_dilation_iter"],
+            device=row["device"],
+            seed=row["seed"],
+            scene_type=row["scene_type"],
+            confidence_level=row["confidence_level"],
+            created_at=row["created_at"],
+        )

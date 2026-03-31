@@ -140,7 +140,7 @@ def main() -> None:
         print(json.dumps(report, ensure_ascii=True))
         return
 
-    providers = ProviderRuntime(settings)
+    providers = ProviderRuntime(settings, repository=repository)
     service = WorkerService(settings=settings, repository=repository, providers=providers)
 
     if args.once:
