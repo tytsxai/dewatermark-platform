@@ -37,7 +37,6 @@ MVP 先做：
 
 当前默认 provider：
 
-- `cloud_inpaint`
 - `comfy_diffueraser`
 - `local_fallback`
 
@@ -174,12 +173,13 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 - `DWM_COMFYUI_DIR` / `DWM_COMFYUI_VENV_DIR` / `DWM_COMFYUI_CUSTOM_NODES_DIR` / `DWM_COMFYUI_MODELS_DIR`: local AI runtime paths
 - `DWM_LOCAL_FALLBACK_MODE`: `ffmpeg_copy` or `delogo`, controls how the local provider transforms video
 - `DWM_LOCAL_FALLBACK_DELOGO_{X,Y,W,H}`: required together to enable delogo filter
+- `DWM_ALLOW_PRIVATE_CALLBACK_URLS`: allow `localhost` / private IP callback targets when you explicitly need intranet callbacks
 - `DWM_FILE_RETENTION_DAYS`: how long input/output files are considered recent
 - `DWM_SUBMIT_RATE_LIMIT_COUNT` / `DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS`: per-API-key submit rate limit, default `60` requests per `60s`
 - `DWM_PROVIDER_RUNTIME_DELAY_SECONDS`: simulated runtime delay for fake providers
 - `DWM_CALLBACK_RETRY_COUNT` / `DWM_CALLBACK_RETRY_DELAY_SECONDS`: callback retry policy
 
-FFmpeg must be installed and on `PATH` for the local fallback provider to work (`brew install ffmpeg` or similar). If you only need a copy mode, leave the delogo variables unset.
+`ffmpeg_copy` mode directly copies the input file into `storage/outbox/`. `delogo` requires FFmpeg on `PATH` (`brew install ffmpeg` or similar) plus the delogo coordinates.
 `uv run dewatermark-worker --doctor` now also reports `sqlite3` / `git` / `ffmpeg` readiness.
 
 当前推荐的本地 AI 运行时目录是仓库内的 `.runtime/ComfyUI`，不要把 Electron 客户端缓存目录误当成真正的 Comfy 推理运行时。
@@ -208,7 +208,7 @@ uv run pytest
 
 - `comfy_diffueraser`：未来主方案，本地 AI 自动视频去水印
 - `local_fallback`：当前兜底，保证系统持续可跑
-- `cloud_inpaint`：当前占位，后续按需要接回
+- `local_fallback` 的 `ffmpeg_copy` 模式只负责保活，不会再把 ffmpeg 执行失败伪装成成功
 
 当前仓库已经具备 `comfy_diffueraser` 的最小探测骨架：
 

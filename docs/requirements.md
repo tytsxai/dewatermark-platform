@@ -127,7 +127,6 @@ MVP 必须满足：
 
 一期先支持三类：
 
-- `cloud_inpaint`
 - `comfy_diffueraser`
 - `local_fallback`
 
@@ -139,9 +138,6 @@ MVP 必须满足：
 - `local_fallback`
   - 兜底保活
   - 不能代表最终 AI 能力
-- `cloud_inpaint`
-  - 兼容或备用路径
-  - 不作为当前“本地 AI 主方案”定义
 
 ### Status
 
@@ -169,15 +165,14 @@ MVP 必须满足：
 
 支持三种模式：
 
-1. `provider=cloud_inpaint`
-2. `provider=comfy_diffueraser`
+1. `provider=comfy_diffueraser`
+2. `provider=local_fallback`
 3. `provider=auto`
 
 `auto` 的一期默认策略：
 
 1. 先尝试 `comfy_diffueraser`
-2. 失败则降级到 `cloud_inpaint`
-3. 再失败则降级到 `local_fallback`
+2. 失败则降级到 `local_fallback`
 
 这个顺序后续可配置，但现在先固定，保持简单。
 
@@ -215,6 +210,7 @@ MVP 必须满足：
 - 如果设置了 `callback_secret`，回调头里带签名
 - 回调失败自动重试，至少 3 次
 - 回调失败不能影响 job 最终状态写入
+- 生产默认只允许公网 `http/https` 回调地址；`localhost` 和私网 IP 需要显式放开
 
 ## 10. 文件管理
 

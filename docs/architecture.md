@@ -100,8 +100,6 @@ client
 - `local_fallback`
   - 兜底路径
   - 负责系统保活，不代表最终效果目标
-- `cloud_inpaint`
-  - 可选兼容路径
 
 统一接口建议：
 

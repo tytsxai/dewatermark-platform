@@ -15,7 +15,6 @@
   - `image`
 - `provider`
   - `auto`
-  - `cloud_inpaint`
   - `comfy_diffueraser`
   - `local_fallback`
 - `callback_url`
@@ -33,6 +32,7 @@
 - 一期至少支持 `multipart/form-data` 上传文件
 - 如果传 `input_path`，只允许本机可信路径
 - 如果传文件上传，服务端负责落盘到 `storage/inbox/`
+- 如果传 `callback_url`，默认只允许公网 `http/https` 地址；`localhost` 和私网 IP 默认拒绝
 
 成功响应示例：
 
