@@ -76,6 +76,15 @@
 - `status`
 - `provider`
 - `media_type`
+- `page`，默认 `1`
+- `page_size`，默认 `50`，最大 `200`
+
+响应至少包括：
+
+- `jobs`
+- `page`
+- `page_size`
+- `has_more`
 
 ## 4. Get Job Result
 

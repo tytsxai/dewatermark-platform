@@ -144,7 +144,7 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 
 ## Platform Endpoints
 
-- `GET /v1/jobs`: list jobs filtered by tenant and optional `status`, `provider`, `media_type`
+- `GET /v1/jobs`: list jobs filtered by tenant and optional `status`, `provider`, `media_type`, `page`, `page_size`
 - `GET /v1/jobs/{job_id}`: get status (existing)
 - `GET /v1/jobs/{job_id}/result`: get `output_path`/`download_url` once job finishes
 - `POST /v1/jobs/{job_id}/cancel`: cancel queued jobs only
@@ -164,10 +164,12 @@ Copy `.env.example` and adjust if needed before running, or set the variables li
 - `DWM_LOCAL_FALLBACK_MODE`: `ffmpeg_copy` or `delogo`, controls how the local provider transforms video
 - `DWM_LOCAL_FALLBACK_DELOGO_{X,Y,W,H}`: required together to enable delogo filter
 - `DWM_FILE_RETENTION_DAYS`: how long input/output files are considered recent
+- `DWM_SUBMIT_RATE_LIMIT_COUNT` / `DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS`: per-API-key submit rate limit, default `60` requests per `60s`
 - `DWM_PROVIDER_RUNTIME_DELAY_SECONDS`: simulated runtime delay for fake providers
 - `DWM_CALLBACK_RETRY_COUNT` / `DWM_CALLBACK_RETRY_DELAY_SECONDS`: callback retry policy
 
 FFmpeg must be installed and on `PATH` for the local fallback provider to work (`brew install ffmpeg` or similar). If you only need a copy mode, leave the delogo variables unset.
+`uv run dewatermark-worker --doctor` now also reports `sqlite3` / `git` / `ffmpeg` readiness.
 
 当前推荐的本地 AI 运行时目录是仓库内的 `.runtime/ComfyUI`，不要把 Electron 客户端缓存目录误当成真正的 Comfy 推理运行时。
 
