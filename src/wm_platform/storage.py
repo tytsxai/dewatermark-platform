@@ -26,16 +26,24 @@ def _validate_extension(path: Path) -> None:
 def _copy_stream_with_hash(source, destination: Path, max_upload_bytes: int) -> tuple[str, int]:
     digest = hashlib.sha256()
     total_bytes = 0
-    with destination.open("wb") as output:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            if total_bytes > max_upload_bytes:
-                raise AppError("FILE_TOO_LARGE", "uploaded file exceeds configured size limit", 400)
-            digest.update(chunk)
-            output.write(chunk)
+    # Atomic write: write to temp file first, then rename
+    temp_path = destination.with_suffix(f"{destination.suffix}.tmp")
+    try:
+        with temp_path.open("wb") as output:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_upload_bytes:
+                    raise AppError("FILE_TOO_LARGE", "uploaded file exceeds configured size limit", 400)
+                digest.update(chunk)
+                output.write(chunk)
+        temp_path.rename(destination)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
     return digest.hexdigest(), total_bytes
 
 
@@ -49,6 +57,7 @@ def save_upload_file(upload: UploadFile, settings: Settings) -> tuple[Path, str]
         digest, _ = _copy_stream_with_hash(upload.file, target, settings.max_upload_bytes)
         return target, digest
     except Exception:
+        # Clean up target file on failure (atomic write already handles temp file cleanup)
         if target.exists():
             target.unlink()
         raise
