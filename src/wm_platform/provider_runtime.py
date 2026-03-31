@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 import time
@@ -23,6 +24,9 @@ from wm_platform.storage import build_output_path
 
 AUTO_FALLBACK_ORDER = ["comfy_diffueraser", "local_fallback"]
 _PROBE_CACHE: dict[tuple[str, str, str, str], tuple[float, list[ProviderProbeResult]]] = {}
+DEFAULT_QUALITY_PROFILE = "balanced"
+REQUIRED_WORKFLOW_NODE_TYPES = ("Propainter_Sampler", "DiffuEraser_Sampler")
+logger = logging.getLogger(__name__)
 
 # Quality profiles 配置
 QUALITY_PROFILES = {
@@ -41,6 +45,13 @@ QUALITY_PROFILES = {
         "ref_stride": 10,
     },
     "quality": {
+        "steps": 7,
+        "subvideo_length": 100,
+        "neighbor_length": 20,
+        "mask_dilation_iter": 3,
+        "ref_stride": 10,
+    },
+    "corner_hq": {
         "steps": 7,
         "subvideo_length": 100,
         "neighbor_length": 20,
@@ -100,7 +111,10 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
     def __init__(self, name: str, settings: Settings, repository: JobRepository | None = None) -> None:
         super().__init__(name=name, settings=settings)
         self.repository = repository
+
     def probe(self) -> ProviderProbeResult:
+        profile = self._quality_profile_name()
+        workflow_path = self._workflow_path(profile)
         installation_issues = self._missing_installation_bits()
         workflow_issue = self._workflow_issue()
         workflow_ready = workflow_issue is None
@@ -120,7 +134,9 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
             "venv_python": str(self.settings.comfyui_venv_dir / "bin" / "python"),
             "custom_nodes_dir": str(self.settings.comfyui_custom_nodes_dir),
             "models_dir": str(self.settings.comfyui_models_dir),
-            "workflow_path": str(self.settings.comfyui_diffueraser_workflow),
+            "workflow_path": str(workflow_path),
+            "workflow_name": workflow_path.name,
+            "quality_profile": profile,
             "runtime_root": str(self.settings.runtime_root),
             "missing_installation_bits": installation_issues,
             "missing_models": missing_models,
@@ -156,19 +172,18 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         if self.repository is None:
             return
         try:
-            profile = self.settings.quality_mode
-            profile_config = QUALITY_PROFILES.get(profile, QUALITY_PROFILES["balanced"])
+            profile, profile_config = self._quality_profile()
             metadata = RunMetadataRecord(
                 id=0,
                 job_id=job.job_id,
-                workflow_name=self.settings.comfyui_diffueraser_workflow.name,
+                workflow_name=self._workflow_path(profile).name,
                 quality_profile=profile,
                 steps=profile_config["steps"],
                 subvideo_length=profile_config["subvideo_length"],
                 neighbor_length=profile_config["neighbor_length"],
                 mask_dilation_iter=profile_config["mask_dilation_iter"],
                 device=device,
-                seed=int(hashlib.sha256(job.job_id.encode("utf-8")).hexdigest()[:8], 16),
+                seed=self._job_seed(job.job_id),
                 scene_type=None,
                 confidence_level=None,
                 created_at=datetime.now(UTC).replace(microsecond=0),
@@ -176,7 +191,7 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
             self.repository.record_run_metadata(metadata)
         except Exception:
             # 元数据记录失败不影响主流程
-            pass
+            logger.exception("failed to record run metadata job_id=%s", job.job_id)
 
     def _missing_installation_bits(self) -> list[str]:
         repo_paths = expected_repo_paths(self.settings)
@@ -205,16 +220,22 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         return missing
 
     def _workflow_issue(self) -> str | None:
-        if not self.settings.comfyui_diffueraser_workflow.exists():
-            return f"missing workflow {self.settings.comfyui_diffueraser_workflow.name}"
+        workflow_path = self._workflow_path()
+        if not workflow_path.exists():
+            return f"missing workflow {workflow_path.name}"
         try:
-            prompt = json.loads(self.settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+            prompt = json.loads(workflow_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             return f"invalid workflow json: {exc.msg}"
         if not isinstance(prompt, dict) or not prompt:
             return "workflow prompt is empty"
         if any(not isinstance(node, dict) or "class_type" not in node for node in prompt.values()):
             return "workflow prompt must use ComfyUI API export format"
+        missing_nodes = [
+            node_type for node_type in REQUIRED_WORKFLOW_NODE_TYPES if self._find_node_inputs(prompt, node_type) is None
+        ]
+        if missing_nodes:
+            return f"workflow missing required nodes: {', '.join(missing_nodes)}"
         return None
 
     def _api_issue(self) -> str | None:
@@ -230,13 +251,11 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         workflow_issue = self._workflow_issue()
         if workflow_issue:
             raise AppError("PROVIDER_NOT_AVAILABLE", workflow_issue, 503)
-        template = json.loads(self.settings.comfyui_diffueraser_workflow.read_text(encoding="utf-8"))
+        profile, profile_config = self._quality_profile()
+        workflow_path = self._workflow_path(profile)
+        template = json.loads(workflow_path.read_text(encoding="utf-8"))
         if not isinstance(template, dict):
             raise AppError("PROVIDER_NOT_AVAILABLE", "workflow prompt is invalid", 503)
-
-        # 应用 quality profile 参数
-        profile = self.settings.quality_mode
-        profile_config = QUALITY_PROFILES.get(profile, QUALITY_PROFILES["balanced"])
 
         replacements: dict[str, object] = {
             "__INPUT_VIDEO__": job.input_path,
@@ -272,7 +291,7 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
                 candidates=["propainter/raft-things.pth", "raft-things.pth"],
                 label="fix_raft",
             ),
-            "__SEED__": int(hashlib.sha256(job.job_id.encode("utf-8")).hexdigest()[:8], 16),
+            "__SEED__": self._job_seed(job.job_id),
         }
         prompt = self._replace_placeholders(copy.deepcopy(template), replacements)
 
@@ -284,27 +303,75 @@ class _ComfyDiffuEraserProvider(_BaseProvider):
         self, prompt: dict[str, dict[str, object]], profile_config: dict[str, int]
     ) -> dict[str, dict[str, object]]:
         """应用 quality profile 参数到 workflow 节点"""
-        # 修改 Propainter_Sampler 节点 (节点 5)
-        if "5" in prompt and "inputs" in prompt["5"]:
-            inputs = prompt["5"]["inputs"]
-            if isinstance(inputs, dict):
-                if "mask_dilation_iter" in inputs:
-                    inputs["mask_dilation_iter"] = profile_config.get("mask_dilation_iter", inputs["mask_dilation_iter"])
-                if "ref_stride" in inputs:
-                    inputs["ref_stride"] = profile_config.get("ref_stride", inputs.get("ref_stride", 10))
-                if "neighbor_length" in inputs:
-                    inputs["neighbor_length"] = profile_config.get("neighbor_length", inputs["neighbor_length"])
-                if "subvideo_length" in inputs:
-                    inputs["subvideo_length"] = profile_config.get("subvideo_length", inputs["subvideo_length"])
+        propainter_inputs = self._find_node_inputs(prompt, "Propainter_Sampler")
+        if propainter_inputs is None:
+            raise AppError("PROVIDER_NOT_AVAILABLE", "workflow missing required Propainter_Sampler node", 503)
+        if "mask_dilation_iter" in propainter_inputs:
+            propainter_inputs["mask_dilation_iter"] = profile_config.get(
+                "mask_dilation_iter",
+                propainter_inputs["mask_dilation_iter"],
+            )
+        if "ref_stride" in propainter_inputs:
+            propainter_inputs["ref_stride"] = profile_config.get("ref_stride", propainter_inputs.get("ref_stride", 10))
+        if "neighbor_length" in propainter_inputs:
+            propainter_inputs["neighbor_length"] = profile_config.get("neighbor_length", propainter_inputs["neighbor_length"])
+        if "subvideo_length" in propainter_inputs:
+            propainter_inputs["subvideo_length"] = profile_config.get("subvideo_length", propainter_inputs["subvideo_length"])
 
-        # 修改 DiffuEraser_Sampler 节点 (节点 9)
-        if "9" in prompt and "inputs" in prompt["9"]:
-            inputs = prompt["9"]["inputs"]
-            if isinstance(inputs, dict):
-                if "steps" in inputs:
-                    inputs["steps"] = profile_config.get("steps", inputs["steps"])
+        diffueraser_inputs = self._find_node_inputs(prompt, "DiffuEraser_Sampler")
+        if diffueraser_inputs is None:
+            raise AppError("PROVIDER_NOT_AVAILABLE", "workflow missing required DiffuEraser_Sampler node", 503)
+        if "steps" in diffueraser_inputs:
+            diffueraser_inputs["steps"] = profile_config.get("steps", diffueraser_inputs["steps"])
 
         return prompt
+
+    @staticmethod
+    def _job_seed(job_id: str) -> int:
+        return int(hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:8], 16)
+
+    def _quality_profile_name(self) -> str:
+        profile = self.settings.quality_mode.strip().lower()
+        if profile in QUALITY_PROFILES:
+            return profile
+        logger.warning("unknown quality profile=%s, fallback to %s", profile, DEFAULT_QUALITY_PROFILE)
+        return DEFAULT_QUALITY_PROFILE
+
+    def _quality_profile(self) -> tuple[str, dict[str, int]]:
+        profile = self._quality_profile_name()
+        return profile, QUALITY_PROFILES[profile]
+
+    def _workflow_path(self, profile: str | None = None) -> Path:
+        configured_path = self.settings.comfyui_diffueraser_workflow
+        selected_profile = profile or self._quality_profile_name()
+        workflow_name = WORKFLOW_MAP.get(selected_profile)
+        if not workflow_name:
+            return configured_path
+
+        candidate_roots = [configured_path.parent]
+        if self.settings.comfyui_workflows_dir != configured_path.parent:
+            candidate_roots.append(self.settings.comfyui_workflows_dir)
+        for root in candidate_roots:
+            candidate = (root / workflow_name).resolve()
+            if candidate.exists():
+                return candidate
+
+        logger.warning(
+            "workflow for profile=%s not found, fallback to configured workflow=%s",
+            selected_profile,
+            configured_path,
+        )
+        return configured_path
+
+    @staticmethod
+    def _find_node_inputs(prompt: dict[str, dict[str, object]], class_type: str) -> dict[str, object] | None:
+        for node in prompt.values():
+            if not isinstance(node, dict) or node.get("class_type") != class_type:
+                continue
+            inputs = node.get("inputs")
+            if isinstance(inputs, dict):
+                return inputs
+        return None
 
     def _inject_prompt_runtime_values(
         self,
@@ -635,7 +702,7 @@ class ProviderRuntime:
             str(self.settings.runtime_root),
             self.settings.comfyui_api_url,
             self.settings.local_fallback_mode,
-            str(self.settings.comfyui_diffueraser_workflow),
+            f"{self.settings.quality_mode}:{self.settings.comfyui_diffueraser_workflow}",
         )
         now = time.monotonic()
         cached = _PROBE_CACHE.get(cache_key)
