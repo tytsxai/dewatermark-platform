@@ -37,9 +37,18 @@ class WorkerService:
         callback_thread.start()
         try:
             while self._running:
-                processed = self.run_once()
-                if not processed:
-                    time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+                try:
+                    processed = self.run_once()
+                    if not processed:
+                        time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+                except Exception as exc:
+                    # Catch any unexpected exceptions in run_once to prevent worker from crashing
+                    logger.exception("unhandled exception in worker run_once: %s", exc)
+                    # Wait a bit before retrying to prevent tight error loops
+                    time.sleep(max(1.0, self.settings.worker_poll_interval_seconds * 5))
+        except Exception as exc:
+            # Log the final exception before exiting
+            logger.critical("worker shutting down due to unhandled exception: %s", exc)
         finally:
             self.callback_service.stop()
             callback_thread.join(timeout=2.0)
@@ -72,6 +81,7 @@ class WorkerService:
         )
         heartbeat_thread.start()
 
+        updated: JobRecord | None = None
         try:
             provider_name, output_path = self.providers.run_with_fallback(job)
             duration_ms = self._duration_ms(started_at)
@@ -131,7 +141,9 @@ class WorkerService:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=1.0)
 
-        self.repository.enqueue_callback(updated)
+        # Only enqueue callback if we have a valid updated job record
+        if updated is not None:
+            self.repository.enqueue_callback(updated)
 
     def _heartbeat_job_claim(self, job_id: str, stop_event: threading.Event) -> None:
         interval = max(
@@ -166,10 +178,18 @@ class CallbackWorkerService:
 
     def run_forever(self) -> None:
         logger.info("callback worker started lock_owner=%s db=%s", self.lock_owner, self.settings.db_path)
-        while self._running:
-            processed = self.run_once()
-            if not processed:
-                time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+        try:
+            while self._running:
+                try:
+                    processed = self.run_once()
+                    if not processed:
+                        time.sleep(max(0.0, self.settings.worker_poll_interval_seconds))
+                except Exception as exc:
+                    # Catch any unexpected exceptions to prevent callback worker from crashing
+                    logger.exception("unhandled exception in callback worker run_once: %s", exc)
+                    time.sleep(max(1.0, self.settings.worker_poll_interval_seconds * 5))
+        except Exception as exc:
+            logger.critical("callback worker shutting down due to unhandled exception: %s", exc)
 
     def run_once(self) -> bool:
         reclaimed = self.repository.reset_stale_callback_claims(self.settings.job_claim_timeout_seconds)

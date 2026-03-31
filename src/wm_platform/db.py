@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 from wm_platform.config import Settings
+
+logger = logging.getLogger(__name__)
+
+# Maximum number of retries for database operations
+MAX_DB_RETRIES = 3
+# Base delay for exponential backoff (seconds)
+BASE_RETRY_DELAY = 0.1
 
 
 SCHEMA = """
@@ -120,13 +129,51 @@ def init_db(settings: Settings) -> None:
         connection.commit()
 
 
+def _is_retryable_error(exc: Exception) -> bool:
+    """Check if the error is retryable (database locked, busy, etc.)"""
+    if isinstance(exc, sqlite3.OperationalError):
+        error_msg = str(exc).lower()
+        return any(keyword in error_msg for keyword in ["locked", "busy", "database is locked"])
+    return False
+
+
+def _execute_with_retry(func, description: str = "database operation"):
+    """Execute a database operation with retry logic for transient errors."""
+    last_exc: Exception | None = None
+    for attempt in range(MAX_DB_RETRIES):
+        try:
+            return func()
+        except Exception as exc:
+            if not _is_retryable_error(exc):
+                raise
+            last_exc = exc
+            delay = BASE_RETRY_DELAY * (2 ** attempt)
+            logger.warning(
+                "%s failed (attempt %d/%d): %s, retrying in %.2fs",
+                description,
+                attempt + 1,
+                MAX_DB_RETRIES,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
 @contextmanager
 def db_connection(settings: Settings) -> Iterator[sqlite3.Connection]:
-    connection = sqlite3.connect(settings.db_path, timeout=30, detect_types=sqlite3.PARSE_DECLTYPES)
-    connection.row_factory = sqlite3.Row
-    _configure_connection(connection)
+    def _create_connection():
+        connection = sqlite3.connect(settings.db_path, timeout=30, detect_types=sqlite3.PARSE_DECLTYPES)
+        connection.row_factory = sqlite3.Row
+        _configure_connection(connection)
+        return connection
+
+    connection = _execute_with_retry(_create_connection, "create connection")
     try:
         yield connection
         connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
