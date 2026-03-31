@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 MediaType = Literal["video", "image"]
-ProviderName = Literal["auto", "cloud_inpaint", "comfy_diffueraser", "local_fallback"]
+ProviderName = Literal["auto", "comfy_diffueraser", "local_fallback"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 CallbackDeliveryStatus = Literal["pending", "delivering", "succeeded", "failed"]
 

@@ -25,6 +25,7 @@ class Settings:
     job_claim_heartbeat_seconds: float
     callback_retry_count: int
     callback_retry_delay_seconds: float
+    allow_private_callback_urls: bool
     submit_rate_limit_count: int
     submit_rate_limit_window_seconds: float
     provider_probe_cache_seconds: float
@@ -94,6 +95,7 @@ def load_settings() -> Settings:
         job_claim_heartbeat_seconds=float(os.getenv("DWM_JOB_CLAIM_HEARTBEAT_SECONDS", "30.0")),
         callback_retry_count=int(os.getenv("DWM_CALLBACK_RETRY_COUNT", "3")),
         callback_retry_delay_seconds=float(os.getenv("DWM_CALLBACK_RETRY_DELAY_SECONDS", "1.0")),
+        allow_private_callback_urls=_env_bool("DWM_ALLOW_PRIVATE_CALLBACK_URLS", False),
         submit_rate_limit_count=int(os.getenv("DWM_SUBMIT_RATE_LIMIT_COUNT", "60")),
         submit_rate_limit_window_seconds=float(os.getenv("DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS", "60.0")),
         provider_probe_cache_seconds=float(os.getenv("DWM_PROVIDER_PROBE_CACHE_SECONDS", "10.0")),

@@ -25,10 +25,11 @@ from wm_platform.models import (
 from wm_platform.provider_runtime import ProviderRuntime
 from wm_platform.rate_limit import enforce_submit_rate_limit
 from wm_platform.repository import JobRepository
+from wm_platform.callbacks import validate_callback_url
 from wm_platform.storage import save_upload_file, validate_local_input_path
 
-AllowedProvider = Literal["auto", "cloud_inpaint", "comfy_diffueraser", "local_fallback"]
-ALLOWED_PROVIDERS: set[str] = {"auto", "cloud_inpaint", "comfy_diffueraser", "local_fallback"}
+AllowedProvider = Literal["auto", "comfy_diffueraser", "local_fallback"]
+ALLOWED_PROVIDERS: set[str] = {"auto", "comfy_diffueraser", "local_fallback"}
 ALLOWED_MEDIA_TYPES: set[str] = {"video", "image"}
 ALLOWED_STATUSES: set[str] = {"queued", "running", "succeeded", "failed", "canceled"}
 logger = logging.getLogger(__name__)
@@ -94,6 +95,8 @@ def create_app() -> FastAPI:
             raise AppError("VALIDATION_ERROR", "provider is invalid", 400)
         if (file is None and not input_path) or (file is not None and input_path):
             raise AppError("VALIDATION_ERROR", "provide exactly one of file or input_path", 400)
+        if callback_url is not None:
+            callback_url = validate_callback_url(callback_url, settings)
 
         if file is not None:
             final_input_path, input_signature = save_upload_file(file, settings)

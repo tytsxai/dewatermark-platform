@@ -718,7 +718,7 @@ class JobRepository:
     @staticmethod
     def default_fallback_chain(provider_requested: str) -> str:
         if provider_requested == "auto":
-            chain = ["comfy_diffueraser", "cloud_inpaint", "local_fallback"]
+            chain = ["comfy_diffueraser", "local_fallback"]
         else:
             chain = [provider_requested]
         return json.dumps(chain)

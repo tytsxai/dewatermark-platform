@@ -84,6 +84,35 @@ def test_submit_job_and_idempotent(api_client, auth_headers, settings):
     assert second.json()["job_id"] == first_body["job_id"]
 
 
+def test_submit_job_rejects_reserved_provider(api_client, auth_headers):
+    response = api_client.post(
+        "/v1/jobs",
+        headers={**auth_headers, "Idempotency-Key": "reserved-provider"},
+        files={"file": ("video.mp4", io.BytesIO(b"\x00" * 16), "video/mp4")},
+        data={
+            "media_type": "video",
+            "provider": "cloud_inpaint",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "VALIDATION_ERROR"
+
+
+def test_submit_job_rejects_private_callback_url(api_client, auth_headers):
+    response = api_client.post(
+        "/v1/jobs",
+        headers={**auth_headers, "Idempotency-Key": "private-callback"},
+        files={"file": ("video.mp4", io.BytesIO(b"\x00" * 16), "video/mp4")},
+        data={
+            "media_type": "video",
+            "provider": "auto",
+            "callback_url": "http://127.0.0.1:9000/callback",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "VALIDATION_ERROR"
+
+
 def test_worker_marks_job_succeeded(job_repo, settings):
     fallback_chain = JobRepository.default_fallback_chain("local_fallback")
     payload = JobCreate(
@@ -107,7 +136,30 @@ def test_worker_marks_job_succeeded(job_repo, settings):
 
 def test_provider_auto_chain():
     chain = json.loads(JobRepository.default_fallback_chain("auto"))
-    assert chain == ["comfy_diffueraser", "cloud_inpaint", "local_fallback"]
+    assert chain == ["comfy_diffueraser", "local_fallback"]
+
+
+def test_local_fallback_copy_mode_does_not_invoke_ffmpeg(job_repo, settings, monkeypatch):
+    copy_settings = replace(settings, local_fallback_mode="ffmpeg_copy")
+    provider = ProviderRuntime(copy_settings).registry["local_fallback"]
+    job = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="local_fallback",
+            fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+            input_path=str(_prepare_video_file(settings.inbox_dir, "copy-mode.mp4")),
+        )
+    )
+
+    def _unexpected_run(*args, **kwargs):
+        raise AssertionError("ffmpeg should not run in ffmpeg_copy mode")
+
+    monkeypatch.setattr("wm_platform.provider_runtime.subprocess.run", _unexpected_run)
+    result = provider.run(job)
+
+    assert Path(result["output_path"]).exists()
+    assert Path(result["output_path"]).read_bytes() == Path(job.input_path).read_bytes()
 
 
 def test_callback_event_record(job_repo):

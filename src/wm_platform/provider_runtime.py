@@ -19,7 +19,7 @@ from wm_platform.models import JobRecord, ProviderProbeResult
 from wm_platform.runtime_contract import expected_model_entries, expected_repo_paths
 from wm_platform.storage import build_output_path
 
-AUTO_FALLBACK_ORDER = ["comfy_diffueraser", "cloud_inpaint", "local_fallback"]
+AUTO_FALLBACK_ORDER = ["comfy_diffueraser", "local_fallback"]
 _PROBE_CACHE: dict[tuple[str, str, str, str], tuple[float, list[ProviderProbeResult]]] = {}
 
 
@@ -411,12 +411,13 @@ class _LocalFallbackProvider(_BaseProvider):
         source_path = job.input_path
         output_path = build_output_path(job.job_id, source_path, self.settings)
         mode = self.settings.local_fallback_mode.strip().lower()
+        if mode == "ffmpeg_copy":
+            shutil.copyfile(source_path, output_path)
+            return {"output_path": str(output_path)}
+
         command = self._build_ffmpeg_command(Path(source_path), output_path)
         completed = subprocess.run(command, capture_output=True, text=True, check=False)
         if completed.returncode != 0:
-            if mode == "ffmpeg_copy":
-                shutil.copyfile(source_path, output_path)
-                return {"output_path": str(output_path)}
             stderr = (completed.stderr or "").strip()
             detail = stderr.splitlines()[-1] if stderr else "ffmpeg failed"
             raise AppError("PROVIDER_RUN_FAILED", f"local_fallback ffmpeg error: {detail}", 500)
@@ -511,11 +512,6 @@ class ProviderRuntime:
         self.settings = settings
         self.registry: dict[str, _BaseProvider] = {
             "comfy_diffueraser": _ComfyDiffuEraserProvider(name="comfy_diffueraser", settings=settings),
-            "cloud_inpaint": _UnavailableProvider(
-                name="cloud_inpaint",
-                settings=settings,
-                message="provider not wired in MVP",
-            ),
             "local_fallback": _LocalFallbackProvider(name="local_fallback", settings=settings),
         }
 
