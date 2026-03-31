@@ -1,5 +1,7 @@
 # Architecture
 
+本文档描述开源 AI 去水印平台的最小可跑架构，目标是保持 `API + worker + provider runtime` 边界清晰，优先保证系统能跑和能扩展。
+
 ## 1. 一期架构
 
 一期只用最简单能跑的结构：

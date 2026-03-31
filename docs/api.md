@@ -1,4 +1,13 @@
-# API Draft
+# Dewatermark API
+
+本文档描述 `Dewatermark Platform` 的 HTTP API 草案，重点覆盖异步任务提交、状态查询、结果获取、provider 探测和回调语义。
+
+关键词：
+
+- AI 去水印 API
+- video watermark removal API
+- async dewatermark jobs
+- self-hosted dewatermark service
 
 ## 1. Submit Job
 

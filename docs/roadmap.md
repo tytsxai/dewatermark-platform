@@ -1,5 +1,7 @@
 # Roadmap
 
+本文档记录开源 AI 去水印平台的阶段目标和当前推进状态，重点是先把独立 API、worker、provider 和本地 AI runtime 主链跑通。
+
 ## 阶段 0
 
 先把文档钉死：

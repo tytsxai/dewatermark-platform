@@ -1,5 +1,7 @@
 # Product Requirements
 
+本文档定义 `Dewatermark Platform` 的产品边界和一期交付口径，避免项目重新滑回“旧工作流里的临时去水印脚本”。
+
 ## 1. 项目定位
 
 这是一个独立的本地去水印系统。
@@ -125,7 +127,7 @@ MVP 必须满足：
 
 ### Provider
 
-一期先支持三类：
+一期先支持两类：
 
 - `comfy_diffueraser`
 - `local_fallback`
