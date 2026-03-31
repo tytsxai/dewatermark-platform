@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fcntl
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -7,6 +9,8 @@ from pathlib import Path
 import httpx
 
 from wm_platform.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def comfy_python(settings: Settings) -> Path:
@@ -62,8 +66,46 @@ def wait_for_comfyui(settings: Settings, timeout_seconds: float = 60.0) -> dict[
 
 
 def start_comfyui(settings: Settings) -> subprocess.Popen[str]:
-    command = build_comfyui_command(settings)
-    return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True)
+    """Start ComfyUI with file lock to prevent race conditions.
+    
+    When multiple workers try to start ComfyUI simultaneously, only one
+    will actually start it. Others will wait for the first one to finish.
+    """
+    lock_dir = settings.runtime_root / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_dir / "comfyui_startup.lock"
+    
+    with open(lock_file, "w") as f:
+        try:
+            # Try to acquire exclusive lock without blocking
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            # Another process is already starting ComfyUI
+            logger.info("Another process is starting ComfyUI, waiting...")
+            # Wait for the other process to finish
+            result = wait_for_comfyui(settings, timeout_seconds=120.0)
+            if result.get("ok"):
+                logger.info("ComfyUI started by another process")
+                # Return a dummy Popen object since ComfyUI is already running
+                return subprocess.Popen(["sleep", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            else:
+                raise RuntimeError(f"ComfyUI failed to start by another process: {result.get('error')}")
+        
+        # We got the lock, start ComfyUI
+        try:
+            # Double-check if ComfyUI is already running (might have been started before we got the lock)
+            health = comfyui_health(settings)
+            if health.get("ok"):
+                logger.info("ComfyUI already running")
+                return subprocess.Popen(["sleep", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            
+            command = build_comfyui_command(settings)
+            logger.info("Starting ComfyUI: %s", " ".join(command))
+            process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, text=True)
+            return process
+        finally:
+            # Release the lock
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _port_from_api_url(api_url: str) -> int:
