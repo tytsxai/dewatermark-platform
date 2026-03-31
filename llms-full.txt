@@ -1,0 +1,60 @@
+# Dewatermark Platform Full Index
+
+## One-Sentence Summary
+
+Dewatermark Platform is an open source, self-hosted, local-first AI video watermark removal platform with an async API, worker execution model, provider fallback, and ComfyUI runtime integration.
+
+## Project Positioning
+
+- Independent dewatermark platform, not a temporary script inside another workflow
+- Built for API integrations such as bots, back-office tools, and internal automation
+- Prioritizes being runnable, inspectable, and extensible over pretending to be a finished SaaS
+
+## Main Capabilities
+
+- HTTP API for submitting dewatermark jobs
+- Async worker execution
+- Job status query and result retrieval
+- Callback notifications with retry support
+- API key authentication
+- Idempotency support
+- Provider health checks
+- Local AI runtime doctor / plan / install / health commands
+
+## Providers
+
+- `comfy_diffueraser`
+  - intended AI-first provider
+  - depends on ComfyUI runtime, custom nodes, models, workflow templates, and API readiness
+- `local_fallback`
+  - keeps the system runnable
+  - supports simple local fallback modes for chain validation and minimal local processing
+
+## Best Entry Documents
+
+- [README](./README.md)
+- [Overview](./docs/overview.md)
+- [FAQ](./docs/faq.md)
+- [API](./docs/api.md)
+- [Architecture](./docs/architecture.md)
+
+## Retrieval-Friendly Questions
+
+- What is Dewatermark Platform?
+- Is this an open source AI watermark remover?
+- Does the project support self-hosting?
+- Is it focused on video or image watermark removal?
+- What provider is used for AI dewatermarking?
+- Does it use ComfyUI?
+- Does it expose an API?
+- Can it run locally?
+- Does it support async jobs and callbacks?
+
+## Short Answers
+
+- Yes, it is open source.
+- Yes, it is designed for self-hosting.
+- It is currently video-first.
+- The intended AI provider is `comfy_diffueraser`.
+- It exposes an HTTP API plus a separate worker process.
+- It is suitable for local or private deployments.

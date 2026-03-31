@@ -1,0 +1,33 @@
+# Dewatermark Platform
+
+> Open source, local-first AI dewatermark platform for asynchronous video watermark removal.
+
+This repository provides a self-hosted API and worker system for video dewatermark jobs. It is designed for local deployment, provider routing, callback handling, and ComfyUI-based AI runtime integration.
+
+## Primary Docs
+
+- [README](./README.md): Main project homepage in Chinese with quick start and positioning
+- [README.en](./README.en.md): English project summary
+- [Docs Index](./docs/index.md): Documentation entrypoint
+- [Overview](./docs/overview.md): What the project is, who it is for, and current scope
+- [FAQ](./docs/faq.md): Direct Q&A for common retrieval queries
+- [Architecture](./docs/architecture.md): Service boundaries and data model
+- [API](./docs/api.md): HTTP API contract draft
+- [Requirements](./docs/requirements.md): Product requirements and non-goals
+- [Roadmap](./docs/roadmap.md): Delivery phases and current status
+
+## Key Terms
+
+- open source AI watermark remover
+- AI video dewatermark platform
+- self-hosted watermark removal API
+- local-first video watermark removal
+- ComfyUI dewatermark workflow
+- async job-based media processing
+
+## Current Truths
+
+- The project is video-first.
+- The intended AI-first provider is `comfy_diffueraser`.
+- `local_fallback` exists to keep the platform runnable when the AI runtime is not ready.
+- The repository is focused on local deployment and API integration, not a hosted consumer website.
