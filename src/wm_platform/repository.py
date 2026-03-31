@@ -9,6 +9,7 @@ from typing import Any
 
 from wm_platform.config import Settings
 from wm_platform.db import db_connection, sha256_text
+from wm_platform.job_locks import is_job_lock_held
 from wm_platform.models import CallbackOutboxRecord, CallbackPayload, JobCreate, JobRecord, RunMetadataRecord
 
 
@@ -149,20 +150,22 @@ class JobRepository:
         self,
         tenant_id: str,
         idempotency_key: str | None,
-        input_signature: str | None,
-        input_path: str,
     ) -> JobRecord | None:
         if not idempotency_key:
             return None
 
         with db_connection(self.settings) as connection:
-            row = self._find_idempotent_job_row(
-                connection=connection,
-                tenant_id=tenant_id,
-                idempotency_key=idempotency_key,
-                input_signature=input_signature,
-                input_path=input_path,
-            )
+            row = connection.execute(
+                """
+                SELECT *
+                FROM jobs
+                WHERE tenant_id = ?
+                  AND idempotency_key = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (tenant_id, idempotency_key),
+            ).fetchone()
         return _parse_job(row) if row else None
 
     def _find_idempotent_job_row(
@@ -229,16 +232,33 @@ class JobRepository:
     def reset_stale_claims(self, worker_timeout_seconds: int) -> int:
         cutoff = (utc_now() - timedelta(seconds=worker_timeout_seconds)).isoformat()
         with db_connection(self.settings) as connection:
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
+                SELECT job_id
+                FROM jobs
+                WHERE status = 'running' AND claimed_at < ?
+                """,
+                (cutoff,),
+            ).fetchall()
+        reclaimable_job_ids = [
+            row["job_id"] for row in rows if not is_job_lock_held(self.settings, str(row["job_id"]))
+        ]
+        if not reclaimable_job_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in reclaimable_job_ids)
+        with db_connection(self.settings) as connection:
+            cursor = connection.execute(
+                f"""
                 UPDATE jobs
                 SET status = 'queued',
                     claimed_at = NULL,
                     lock_owner = NULL,
                     updated_at = ?
-                WHERE status = 'running' AND claimed_at < ?
+                WHERE status = 'running'
+                  AND job_id IN ({placeholders})
                 """,
-                (utc_now().isoformat(), cutoff),
+                (utc_now().isoformat(), *reclaimable_job_ids),
             )
         return int(cursor.rowcount or 0)
 
@@ -319,6 +339,21 @@ class JobRepository:
                     (job_id, tenant_id),
                 ).fetchone()
         return _parse_job(updated_row)
+
+    def release_job_claim(self, job_id: str, lock_owner: str) -> bool:
+        with db_connection(self.settings) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'queued',
+                    claimed_at = NULL,
+                    lock_owner = NULL,
+                    updated_at = ?
+                WHERE job_id = ? AND status = 'running' AND lock_owner = ?
+                """,
+                (utc_now().isoformat(), job_id, lock_owner),
+            )
+        return bool(cursor.rowcount)
 
     def cleanup_expired_files(self, older_than: datetime) -> dict[str, int]:
         with db_connection(self.settings) as connection:
@@ -673,6 +708,7 @@ class JobRepository:
 
             next_attempt = int(row["attempt_count"]) + 1
             final_status = "failed" if next_attempt >= int(row["max_attempts"]) else "pending"
+            event_status = "failed" if final_status == "failed" else "retrying"
             connection.execute(
                 """
                 UPDATE callback_outbox
@@ -704,7 +740,7 @@ class JobRepository:
                 INSERT INTO callback_events (job_id, attempt_no, status, response_code, response_body, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (row["job_id"], next_attempt, "failed", response_code, response_body, now),
+                (row["job_id"], next_attempt, event_status, response_code, response_body, now),
             )
 
     def get_callback_outbox(self, job_id: str) -> list[CallbackOutboxRecord]:

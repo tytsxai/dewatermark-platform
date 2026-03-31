@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+import fcntl
 import io
 import json
 import os
@@ -83,6 +84,35 @@ def test_submit_job_and_idempotent(api_client, auth_headers, settings):
     assert second.status_code == first.status_code
     assert second.json()["job_id"] == first_body["job_id"]
 
+    inbox_files = [path for path in settings.inbox_dir.iterdir() if path.name != ".gitkeep"]
+    assert len(inbox_files) == 1
+
+
+def test_submit_job_rejects_idempotency_conflict_when_request_changes(api_client, auth_headers):
+    headers = {**auth_headers, "Idempotency-Key": "idem-conflict"}
+    first = api_client.post(
+        "/v1/jobs",
+        headers=headers,
+        files={"file": ("video.mp4", io.BytesIO(b"\x00" * 16), "video/mp4")},
+        data=_upload_payload({}),
+    )
+    assert first.status_code in {200, 201}
+
+    second = api_client.post(
+        "/v1/jobs",
+        headers=headers,
+        files={"file": ("video.mp4", io.BytesIO(b"\x00" * 16), "video/mp4")},
+        data={
+            "media_type": "video",
+            "provider": "local_fallback",
+            "callback_url": "http://example.com/changed-callback",
+            "callback_secret": "secret",
+        },
+    )
+
+    assert second.status_code == 409
+    assert second.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
 
 def test_submit_job_rejects_reserved_provider(api_client, auth_headers):
     response = api_client.post(
@@ -107,6 +137,25 @@ def test_submit_job_rejects_private_callback_url(api_client, auth_headers):
             "media_type": "video",
             "provider": "auto",
             "callback_url": "http://127.0.0.1:9000/callback",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "VALIDATION_ERROR"
+
+
+def test_submit_job_rejects_callback_domain_resolving_to_private_ip(api_client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        "wm_platform.callbacks.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 0))],
+    )
+    response = api_client.post(
+        "/v1/jobs",
+        headers={**auth_headers, "Idempotency-Key": "private-dns-callback"},
+        files={"file": ("video.mp4", io.BytesIO(b"\x00" * 16), "video/mp4")},
+        data={
+            "media_type": "video",
+            "provider": "auto",
+            "callback_url": "http://callback.example.com/notify",
         },
     )
     assert response.status_code == 400
@@ -242,6 +291,8 @@ def test_callback_worker_retry_records_events(job_repo, settings, monkeypatch):
 
     events = job_repo.get_callback_events(job.job_id)
     assert len(events) == 3
+    assert events[0]["status"] == "retrying"
+    assert events[1]["status"] == "retrying"
     assert events[-1]["status"] == "succeeded"
 
 
@@ -563,15 +614,33 @@ def test_comfy_provider_runs_with_api_prompt(job_repo, settings, monkeypatch, tm
                         }
                     }
                 )
-            if url.endswith("/view"):
-                assert params == {"filename": "video_00001_.mp4", "subfolder": "video", "type": "output"}
-                return _Response(content=b"fake-comfy-video")
             raise AssertionError(f"unexpected GET {url}")
 
         def post(self, url, json=None):
             assert url.endswith("/prompt")
             captured_prompt.update(json or {})
             return _Response(payload={"prompt_id": job.job_id})
+
+        def stream(self, method, url, params=None):
+            assert method == "GET"
+            assert url.endswith("/view")
+            assert params == {"filename": "video_00001_.mp4", "subfolder": "video", "type": "output"}
+
+            class _StreamResponse:
+                status_code = 200
+                text = ""
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def iter_bytes(self):
+                    yield b"fake-"
+                    yield b"comfy-video"
+
+            return _StreamResponse()
 
     monkeypatch.setattr("wm_platform.provider_runtime.httpx.Client", _FakeClient)
     provider = ProviderRuntime(comfy_settings, repository=job_repo).registry["comfy_diffueraser"]
@@ -753,6 +822,53 @@ def test_callback_retry_count_respects_single_attempt(job_repo, settings, monkey
     assert len(events) == 1
     assert events[0]["status"] == "failed"
     assert outbox[0].status == "failed"
+
+
+def test_callback_worker_rejects_private_dns_target_before_send(job_repo, settings, monkeypatch):
+    once_settings = replace(settings, callback_retry_count=1, callback_retry_delay_seconds=0.0)
+    once_repo = JobRepository(once_settings)
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "private-dns-callback.mp4")),
+        callback_url="http://callback.example.com/notify",
+    )
+    job = once_repo.create_job(payload)
+    service = WorkerService(settings=once_settings, repository=once_repo, providers=ProviderRuntime(once_settings, repository=once_repo))
+    assert service.run_once() is True
+
+    monkeypatch.setattr(
+        "wm_platform.callbacks.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 0))],
+    )
+
+    attempts = {"count": 0}
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            attempts["count"] += 1
+            raise AssertionError("private callback target should be blocked before sending")
+
+    monkeypatch.setattr("wm_platform.worker_service.httpx.Client", _UnexpectedClient)
+    callback_service = CallbackWorkerService(settings=once_settings, repository=once_repo, lock_owner="callback-private-dns")
+    assert callback_service.run_once() is True
+
+    outbox = once_repo.get_callback_outbox(job.job_id)
+    events = once_repo.get_callback_events(job.job_id)
+    assert attempts["count"] == 0
+    assert outbox[0].status == "failed"
+    assert events[0]["status"] == "failed"
 
 
 def test_worker_renews_claim_while_processing(job_repo, settings, monkeypatch):
@@ -1004,3 +1120,35 @@ def test_callback_stale_claim_is_reclaimed(job_repo, settings):
     refreshed = job_repo.get_callback_outbox(job.job_id)[0]
     assert refreshed.status == "pending"
     assert refreshed.lock_owner is None
+
+
+def test_reset_stale_claims_skips_job_with_active_file_lock(job_repo, settings):
+    payload = JobCreate(
+        tenant_id=settings.default_tenant_id,
+        media_type="video",
+        provider_requested="local_fallback",
+        fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+        input_path=str(_prepare_video_file(settings.inbox_dir, "active-lock.mp4")),
+    )
+    job = job_repo.create_job(payload)
+    claimed = job_repo.claim_next_job(lock_owner="worker-active")
+    assert claimed is not None
+
+    stale_at = datetime.now(UTC) - timedelta(seconds=settings.job_claim_timeout_seconds + 1)
+    with db_connection(settings) as connection:
+        connection.execute(
+            "UPDATE jobs SET claimed_at = ?, updated_at = ? WHERE job_id = ?",
+            (stale_at.isoformat(), stale_at.isoformat(), job.job_id),
+        )
+
+    lock_dir = settings.storage_root / ".locks" / "jobs"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{job.job_id}.lock"
+    with lock_path.open("w") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert job_repo.reset_stale_claims(settings.job_claim_timeout_seconds) == 0
+
+    current = job_repo.get_job(job.job_id)
+    assert current is not None
+    assert current.status == "running"
+    assert current.lock_owner == "worker-active"

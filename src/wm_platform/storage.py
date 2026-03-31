@@ -47,6 +47,17 @@ def _copy_stream_with_hash(source, destination: Path, max_upload_bytes: int) -> 
     return digest.hexdigest(), total_bytes
 
 
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def save_upload_file(upload: UploadFile, settings: Settings) -> tuple[Path, str]:
     suffix = Path(upload.filename or "upload.mp4").suffix.lower()
     if suffix not in VIDEO_EXTENSIONS:
@@ -65,7 +76,7 @@ def save_upload_file(upload: UploadFile, settings: Settings) -> tuple[Path, str]
         upload.file.close()
 
 
-def validate_local_input_path(raw_path: str, settings: Settings) -> tuple[Path, str | None]:
+def validate_local_input_path(raw_path: str, settings: Settings) -> tuple[Path, str]:
     resolved = Path(raw_path).expanduser().resolve()
     allowed_root = settings.storage_root.resolve()
     try:
@@ -77,7 +88,7 @@ def validate_local_input_path(raw_path: str, settings: Settings) -> tuple[Path, 
         raise AppError("FILE_NOT_FOUND", "input_path does not exist", 404)
 
     _validate_extension(resolved)
-    return resolved, None
+    return resolved, _hash_file(resolved)
 
 
 def build_output_path(job_id: str, source_path: str, settings: Settings) -> Path:

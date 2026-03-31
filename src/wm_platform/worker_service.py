@@ -10,7 +10,9 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from wm_platform.callbacks import validate_callback_url
 from wm_platform.config import Settings
+from wm_platform.job_locks import JobFileLock
 from wm_platform.models import CallbackOutboxRecord, JobRecord
 from wm_platform.provider_runtime import ProviderExecutionError, ProviderRuntime
 from wm_platform.repository import JobRepository
@@ -70,6 +72,12 @@ class WorkerService:
         self.callback_service.stop()
 
     def _process_job(self, job: JobRecord) -> None:
+        job_lock = JobFileLock(self.settings, job.job_id)
+        if not job_lock.acquire():
+            logger.warning("job lock already held, releasing duplicate claim job_id=%s", job.job_id)
+            self.repository.release_job_claim(job_id=job.job_id, lock_owner=self.lock_owner)
+            return
+
         started_at = time.monotonic()
         logger.info("processing job=%s provider_requested=%s", job.job_id, job.provider_requested)
         heartbeat_stop = threading.Event()
@@ -140,6 +148,7 @@ class WorkerService:
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=1.0)
+            job_lock.release()
 
         # Only enqueue callback if we have a valid updated job record
         if updated is not None:
@@ -215,8 +224,9 @@ class CallbackWorkerService:
             headers["X-Signature"] = signature
 
         try:
+            callback_url = validate_callback_url(delivery.callback_url, self.settings)
             with httpx.Client(timeout=10.0) as client:
-                response = client.post(delivery.callback_url, content=delivery.payload_json, headers=headers)
+                response = client.post(callback_url, content=delivery.payload_json, headers=headers)
             if 200 <= response.status_code < 300:
                 self.repository.mark_callback_succeeded(
                     outbox_id=delivery.id,

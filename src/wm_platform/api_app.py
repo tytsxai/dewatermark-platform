@@ -35,6 +35,33 @@ ALLOWED_STATUSES: set[str] = {"queued", "running", "succeeded", "failed", "cance
 logger = logging.getLogger(__name__)
 
 
+def _same_idempotent_request(
+    existing,
+    *,
+    media_type: str,
+    provider: str,
+    callback_url: str | None,
+    callback_secret: str | None,
+    priority: int,
+    input_signature: str | None,
+    input_path: str,
+) -> bool:
+    same_input = False
+    if existing.input_signature and input_signature:
+        same_input = existing.input_signature == input_signature
+    else:
+        same_input = existing.input_path == input_path
+
+    return (
+        same_input
+        and existing.media_type == media_type
+        and existing.provider_requested == provider
+        and existing.callback_url == callback_url
+        and existing.callback_secret == callback_secret
+        and existing.priority == priority
+    )
+
+
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def _lifespan(_: FastAPI):
@@ -107,10 +134,33 @@ def create_app() -> FastAPI:
         existing = repository.find_idempotent_job(
             tenant_id=tenant_id,
             idempotency_key=idempotency_key,
-            input_signature=input_signature,
-            input_path=str(final_input_path),
         )
         if existing is not None:
+            if not _same_idempotent_request(
+                existing,
+                media_type=media_type,
+                provider=provider,
+                callback_url=callback_url,
+                callback_secret=callback_secret,
+                priority=priority,
+                input_signature=input_signature,
+                input_path=str(final_input_path),
+            ):
+                if file is not None and final_input_path.exists() and str(final_input_path) != existing.input_path:
+                    try:
+                        final_input_path.unlink()
+                    except OSError:
+                        logger.warning("failed to remove conflicting idempotent upload path=%s", final_input_path)
+                raise AppError(
+                    "IDEMPOTENCY_CONFLICT",
+                    "idempotency key already used with different request parameters",
+                    409,
+                )
+            if file is not None and final_input_path.exists() and str(final_input_path) != existing.input_path:
+                try:
+                    final_input_path.unlink()
+                except OSError:
+                    logger.warning("failed to remove duplicate idempotent upload path=%s", final_input_path)
             return JobSubmitResponse(
                 job_id=existing.job_id,
                 status=existing.status,
