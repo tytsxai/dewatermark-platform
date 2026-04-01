@@ -74,3 +74,38 @@
 - 本地部署视频去水印
 - open source watermark remover
 - self-hosted video watermark removal
+
+## quality profile 是什么？
+
+quality profile 是 `comfy_diffueraser` 的一组预设参数，控制处理速度和质量：
+
+- `fast`: 最快处理，质量较低 (2 steps, 50帧子视频)
+- `balanced`: 默认，平衡速度和质量 (5 steps, 70帧子视频)
+- `quality`: 高质量，较慢 (7 steps, 100帧子视频)
+- `corner_hq`: 角落水印专用高质量模式
+
+通过 `DWM_QUALITY_MODE` 环境变量切换。
+
+## 系统有哪些安全机制？
+
+- API Key 鉴权 (SHA-256 哈希存储)
+- 提交速率限制 (默认 60次/分钟 per key)
+- 回调地址私网校验 (默认拒绝 localhost/私网)
+- 回调 HMAC-SHA256 签名验证
+- 幂等提交防重复
+
+## 文件怎么管理的？
+
+- 输入文件存 `storage/inbox/`，输出存 `storage/outbox/`
+- 默认保留 7 天 (可配置)
+- 有独立的 cleanup 任务清理过期文件
+- 清理时保护进行中和近期任务的产物
+
+## worker 崩溃会丢任务吗？
+
+不会。worker 使用 SQLite 原子抢锁 + 文件锁 + 心跳续期机制：
+
+- 任务被抢锁后标记为 `running`
+- worker 处理期间定期刷新心跳
+- worker 崩溃后，超时锁会被自动回收，任务回到 `queued`
+- 文件级锁 (fcntl) 防止多进程重复执行

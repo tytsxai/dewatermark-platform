@@ -53,14 +53,22 @@
 
 已具备：
 
-- HTTP API
-- 异步 job
-- 状态查询
-- 结果查询
-- 取消接口
-- provider 健康探测
-- 回调与重试
+- HTTP API (FastAPI)
+- 异步 job (SQLite polling + 文件锁 + 心跳)
+- 状态查询 (GET /v1/jobs)
+- 结果查询 (GET /v1/jobs/{job_id}/result)
+- 取消接口 (POST /v1/jobs/{job_id}/cancel)
+- provider 健康探测 (GET /v1/providers, 带缓存)
+- 回调与重试 (callback outbox + HMAC 签名 + 独立 worker)
 - 本地 runtime `doctor / plan / install / health`
+- Quality profiles (fast / balanced / quality / corner_hq)
+- 文件生命周期管理 (可配置保留天数)
+- 运行元数据记录 (workflow, profile, device, seed)
+- 速率限制 (滑动窗口, per API key)
+- 幂等提交 (Idempotency-Key)
+- SQLite 高可用 (WAL + busy_timeout + 指数退避重试)
+- ComfyUI 自动启动 + 文件锁防竞争
+- 动态模型路径解析 (VAE, LoRA, CLIP, ProPainter, Flow, Raft)
 
 当前重点不在：
 
@@ -69,6 +77,7 @@
 - 复杂计费
 - 集群调度
 - 图片去水印正式交付
+- 模型效果调优 (阶段 6 进行中)
 
 ## 核心关键词
 

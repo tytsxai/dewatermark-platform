@@ -288,12 +288,66 @@ MVP 必须满足：
 
 同时再补一条当前阶段结论：
 
-- 当前项目的最终方向已经锁定为“本地 AI 自动视频去水印平台”
+- 当前项目的最终方向已经锁定为"本地 AI 自动视频去水印平台"
 - 当前框架层已基本具备：
-  - API
-  - worker
-  - provider probe / doctor
-  - ComfyUI runtime contract
+  - API (FastAPI, 鉴权, 速率限制, 幂等, 错误处理)
+  - worker (SQLite polling, 文件锁, 心跳续期, 异常恢复)
+  - provider probe / doctor / runtime install
+  - ComfyUI runtime contract (自动启动, 文件锁防竞争, health check)
+  - callback outbox 模式 (HMAC 签名, 自动重试, 独立线程)
+  - quality profiles (fast / balanced / quality / corner_hq)
+  - run metadata 记录 (workflow, profile, device, seed 等)
+  - SQLite 高可用 (WAL, busy_timeout, 指数退避重试)
+  - 文件生命周期管理 (可配置保留天数, cleanup job)
+  - runtime installer (git clone, venv, pip, 依赖安装)
 - 当前尚未完成的核心项已经收敛为：
   - `comfy_diffueraser` 模型安装
   - 自动 AI 效果与性能调优
+
+## 16. 已实现能力清单
+
+以下能力已在代码中实现并可用：
+
+### 核心 API
+- [x] `POST /v1/jobs` — 文件上传 + 本地路径 + 幂等 + 速率限制
+- [x] `GET /v1/jobs` — 分页 + 过滤 (status, provider, media_type)
+- [x] `GET /v1/jobs/{job_id}` — 状态查询
+- [x] `GET /v1/jobs/{job_id}/result` — 结果查询 + 410 产物缺失处理
+- [x] `POST /v1/jobs/{job_id}/cancel` — 取消 queued 任务
+- [x] `GET /v1/providers` — provider 健康探测 + 缓存
+- [x] `GET /healthz` — API + DB 健康检查
+
+### Worker
+- [x] SQLite polling + 原子抢锁
+- [x] 文件级锁 (fcntl) 防重复执行
+- [x] 心跳续期 (防超时回收)
+- [x] 超时锁回收 (stale claim → queued)
+- [x] 异常恢复 (worker 崩溃不丢任务)
+- [x] 独立 callback worker 线程
+
+### Provider
+- [x] `comfy_diffueraser` — ComfyUI API 执行链 + quality profiles + 动态模型解析
+- [x] `local_fallback` — ffmpeg_copy + delogo 模式
+- [x] `provider=auto` 降级链
+- [x] provider probe 缓存
+
+### Callback
+- [x] callback outbox 表 + 独立 worker
+- [x] HMAC-SHA256 签名 (X-Signature, X-Timestamp)
+- [x] 自动重试 (可配置次数和间隔)
+- [x] 私网地址校验 (默认拒绝 localhost/私网)
+- [x] callback_events 审计日志
+
+### Runtime
+- [x] doctor 报告 (系统依赖 + provider 探测)
+- [x] runtime installer (git clone, venv, pip)
+- [x] ComfyUI 自动启动 + 文件锁防竞争
+- [x] ComfyUI health check + wait
+- [x] runtime lock (lock.yaml) + model manifest (manifest.yaml)
+
+### 其他
+- [x] 速率限制 (滑动窗口, per API key)
+- [x] 文件生命周期管理 (可配置保留天数)
+- [x] run metadata 记录 (workflow, profile, device, seed)
+- [x] SQLite WAL + busy_timeout + 指数退避重试
+- [x] 统一错误码体系
