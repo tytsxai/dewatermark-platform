@@ -56,16 +56,25 @@ Open source, local-first AI dewatermark platform for video workflows.
 - 本地优先，适合私有化部署
 - FastAPI + SQLite + worker 的最小可跑架构
 - 异步任务提交、查询、取消、结果获取
-- API Key 鉴权
-- 幂等提交
+- API Key 鉴权 + 速率限制 (滑动窗口, per API key)
+- 幂等提交 (Idempotency-Key)
 - provider 路由与失败降级
-- 回调通知与重试
+- 回调通知与重试 (HMAC-SHA256 签名)
 - 本地 AI runtime `doctor / plan / install / health` 能力
+- Quality profiles (fast / balanced / quality / corner_hq)
+- 文件生命周期管理 (可配置保留天数)
+- 运行元数据记录 (workflow, profile, device, seed)
 
 当前 provider：
 
 - `comfy_diffueraser`: 本地 AI 主链
-- `local_fallback`: 兜底 provider，保证平台持续可跑
+  - ComfyUI API 执行链
+  - 自动启动 + 文件锁防竞争
+  - 动态模型路径解析 (VAE, LoRA, CLIP, ProPainter, Flow, Raft)
+  - Quality profile 参数注入 (steps, subvideo_length, neighbor_length, mask_dilation_iter, ref_stride)
+- `local_fallback`: 兜底 provider
+  - `ffmpeg_copy`: 保活和链路验证
+  - `delogo`: FFmpeg 去水印 (需配置坐标)
 
 ## 典型使用场景
 
@@ -189,25 +198,47 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 
 启动前可以复制 `.env.example`，或直接设置环境变量。
 
+### 基础配置
+
 - `DWM_DEFAULT_TENANT_ID` / `DWM_DEFAULT_API_KEY`
 - `DWM_STORAGE_ROOT`
 - `DWM_RUNTIME_ROOT`
 - `DWM_MAX_UPLOAD_BYTES`
+
+### ComfyUI / AI Runtime
+
 - `DWM_COMFYUI_API_URL`
 - `DWM_AUTO_START_COMFYUI`
 - `DWM_COMFYUI_DIR`
 - `DWM_COMFYUI_VENV_DIR`
 - `DWM_COMFYUI_CUSTOM_NODES_DIR`
 - `DWM_COMFYUI_MODELS_DIR`
-- `DWM_LOCAL_FALLBACK_MODE`
-- `DWM_LOCAL_FALLBACK_DELOGO_{X,Y,W,H}`
-- `DWM_ALLOW_PRIVATE_CALLBACK_URLS`
-- `DWM_FILE_RETENTION_DAYS`
-- `DWM_SUBMIT_RATE_LIMIT_COUNT`
-- `DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS`
+- `DWM_COMFYUI_WORKFLOWS_DIR`
+- `DWM_COMFYUI_DIFFUERASER_WORKFLOW`
+- `DWM_COMFYUI_SEGMENTATION_REPO` (默认 `briaai/RMBG-2.0`)
+- `DWM_QUALITY_MODE` — quality profile: `fast` / `balanced` / `quality` / `corner_hq` (默认 `balanced`)
+
+### Local Fallback
+
+- `DWM_LOCAL_FALLBACK_MODE` — `ffmpeg_copy` (默认) 或 `delogo`
+- `DWM_LOCAL_FALLBACK_DELOGO_{X,Y,W,H}` — delogo 模式坐标
+
+### 安全与网络
+
+- `DWM_ALLOW_PRIVATE_CALLBACK_URLS` — 允许私网回调地址 (默认拒绝)
+
+### 性能与限制
+
+- `DWM_FILE_RETENTION_DAYS` — 文件保留天数 (默认 7)
+- `DWM_SUBMIT_RATE_LIMIT_COUNT` — 提交速率限制次数 (默认 60)
+- `DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS` — 速率限制窗口秒数 (默认 60)
 - `DWM_PROVIDER_RUNTIME_DELAY_SECONDS`
-- `DWM_CALLBACK_RETRY_COUNT`
-- `DWM_CALLBACK_RETRY_DELAY_SECONDS`
+- `DWM_PROVIDER_PROBE_CACHE_SECONDS` — provider 探测缓存秒数 (默认 10)
+- `DWM_CALLBACK_RETRY_COUNT` — 回调重试次数 (默认 3)
+- `DWM_CALLBACK_RETRY_DELAY_SECONDS` — 回调重试间隔秒数 (默认 1)
+- `DWM_WORKER_POLL_INTERVAL_SECONDS` — worker 轮询间隔 (默认 1.0)
+- `DWM_JOB_CLAIM_TIMEOUT_SECONDS` — job 抢锁超时秒数 (默认 300)
+- `DWM_JOB_CLAIM_HEARTBEAT_SECONDS` — 心跳续期间隔秒数 (默认 30)
 
 `local_fallback` 有两个现实用途：
 
