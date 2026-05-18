@@ -47,16 +47,6 @@ Open source, local-first AI dewatermark platform for video workflows.
 - 独立 runtime contract
 - 独立文档和开源协作入口
 
-## 为什么这个项目对 SEO 和 AI 索引友好
-
-这个仓库现在按“让搜索引擎和 AI 都能更快理解项目”的方式组织：
-
-- README 首页直接回答“它是什么、解决什么问题、适合谁”
-- 文档按产品、架构、API、FAQ 分层
-- 补充 `llms.txt` / `llms-full.txt` 给模型做低成本入口
-- 中英文双 README，覆盖中文和英文检索词
-- 保留明确关键词：`AI 去水印`、`video watermark removal`、`open source`、`self-hosted`、`ComfyUI`
-
 ## 核心能力
 
 - 开源 AI 视频去水印平台
