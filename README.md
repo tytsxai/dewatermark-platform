@@ -1,13 +1,20 @@
 # Dewatermark Platform | 开源 AI 去水印平台
 
+[![Release](https://img.shields.io/github/v/release/tytsxai/dewatermark-platform)](https://github.com/tytsxai/dewatermark-platform/releases) · [English](README.en.md) · [llms.txt](llms.txt) · [Changelog](CHANGELOG.md) · [Docs](docs/index.md) · [Issues](https://github.com/tytsxai/dewatermark-platform/issues)
+
+> **关键词**:开源 AI 去水印平台 · 本地视频去水印 API · 自托管去水印 · ComfyUI 视频去水印 · Diffueraser · 私有化去水印部署 · 异步去水印 worker · FastAPI 去水印 API
+>
+> **Keywords**: open-source AI dewatermark platform · self-hosted video watermark removal · local-first dewatermark API · async video dewatermark jobs · ComfyUI Diffueraser pipeline · private cloud dewatermark · FastAPI watermark removal
+
 Open source, local-first AI dewatermark platform for video workflows.
 
-这是一个面向本地部署的异步去水印系统，目标是把“AI 视频去水印”做成独立、可接入、可扩展的 API 平台，而不是某个既有工作流里的临时脚本。
+这是一个面向本地部署的异步去水印系统,目标是把"AI 视频去水印"做成独立、可接入、可扩展的 API 平台,而不是某个既有工作流里的临时脚本。
 
 - GitHub: <https://github.com/tytsxai/dewatermark-platform>
 - License: [MIT](./LICENSE)
 - English README: [README.en.md](./README.en.md)
 - AI index: [llms.txt](./llms.txt)
+- Changelog: [CHANGELOG.md](./CHANGELOG.md)
 
 ## 项目是什么
 
