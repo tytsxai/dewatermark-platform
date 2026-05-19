@@ -301,3 +301,7 @@ uv run pytest
 - callback 重试
 - `GET /v1/jobs` / `result` / `cancel`
 - `comfy_diffueraser` probe 与 ComfyUI API 执行链
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=tytsxai/dewatermark-platform&type=Date)](https://www.star-history.com/#tytsxai/dewatermark-platform&Date)
