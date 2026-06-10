@@ -11,9 +11,13 @@ keywords = [
   "watermark-removal",
   "video-watermark-removal",
   "video-processing",
+  "media-processing",
+  "ai-video-processing",
   "comfyui",
+  "comfyui-workflow",
   "diffueraser",
   "fastapi",
+  "api",
   "self-hosted",
   "async-jobs",
 ]

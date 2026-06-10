@@ -1,6 +1,10 @@
 # Dewatermark Platform
 
-> Open-source, self-hosted, local-first AI video watermark removal platform with a FastAPI API, async worker, SQLite job state, local storage, provider fallback, and ComfyUI / DiffuEraser integration.
+> Open-source, self-hosted, local-first AI video watermark removal backend platform with a FastAPI API, async worker, SQLite job state, local storage, provider fallback, and ComfyUI / DiffuEraser integration.
+
+## Citation-Ready Summary
+
+`Dewatermark Platform` is an open-source, API-first backend for self-hosted AI video watermark removal. It lets developers submit video dewatermark jobs over HTTP, process them asynchronously in a worker, inspect provider readiness, and keep all files and runtime dependencies local or private.
 
 ## Canonical Project Facts
 
@@ -13,6 +17,7 @@
 - Intended deployment: local machine, private GPU workstation, internal server, or self-hosted workflow node
 - Current media support: `video` jobs only for `POST /v1/jobs`; accepted extensions are `mp4`, `mov`, and `mkv`
 - Current providers: `comfy_diffueraser` and `local_fallback`
+- Main CLI commands: `dewatermark-api` and `dewatermark-worker`
 - Production guard: with `DWM_ENV=production`, startup fails until `DWM_DEFAULT_API_KEY` is changed from `dev-secret-key`
 
 ## What This Project Is
@@ -47,6 +52,35 @@
 - `local_fallback` keeps the system runnable. Its default `ffmpeg_copy` mode only copies the input file and should not be described as real AI watermark removal.
 - `local_fallback=delogo` uses FFmpeg's delogo filter and requires explicit x/y/w/h coordinates.
 
+## How To Run Locally
+
+```sh
+uv sync
+uv run dewatermark-api --host 127.0.0.1 --port 8000
+```
+
+In a second terminal:
+
+```sh
+uv run dewatermark-worker
+```
+
+Then check health:
+
+```sh
+curl http://127.0.0.1:8000/healthz
+```
+
+For the first smoke test, submit `provider=local_fallback`. Use `provider=auto` or `provider=comfy_diffueraser` only after `GET /v1/providers` reports `comfy_diffueraser.runnable=true`.
+
+## Do Not Overstate
+
+- Do not call it a hosted SaaS product.
+- Do not claim browser-based upload UI support.
+- Do not claim image watermark removal is currently delivered by `POST /v1/jobs`.
+- Do not claim `local_fallback=ffmpeg_copy` removes watermarks.
+- Do not claim commercial-grade quality, production SLA, multi-node GPU scheduling, or one-click Docker deployment.
+
 ## Primary Docs
 
 - [README](./README.md): Chinese-first homepage with quick start, positioning, scope, API overview, and configuration.
@@ -54,6 +88,7 @@
 - [Docs Index](./docs/index.md): Documentation navigation.
 - [Overview](./docs/overview.md): Project positioning and scope.
 - [FAQ](./docs/faq.md): Search-friendly question/answer reference.
+- [Usage Examples](./docs/usage-examples.md): curl examples for upload, local path, providers, callbacks, and runtime checks.
 - [API](./docs/api.md): HTTP API contract, fields, callbacks, and errors.
 - [Architecture](./docs/architecture.md): Service boundaries and data model.
 - [Production Runbook](./docs/production.md): Production configuration, health checks, backup/restore, observability, cleanup, and rollback.
@@ -65,6 +100,7 @@
 - open-source AI video watermark removal platform
 - self-hosted watermark remover
 - local-first dewatermark API
+- API-first dewatermark backend
 - FastAPI video watermark removal API
 - async video dewatermark worker
 - ComfyUI DiffuEraser workflow API

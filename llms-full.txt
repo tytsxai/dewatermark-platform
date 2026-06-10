@@ -2,13 +2,14 @@
 
 ## One-Sentence Summary
 
-`Dewatermark Platform` is an open-source, self-hosted, local-first AI video watermark removal platform that exposes a FastAPI API, an async worker, SQLite job tracking, local file storage, provider fallback, and ComfyUI / DiffuEraser runtime integration.
+`Dewatermark Platform` is an open-source, self-hosted, local-first AI video watermark removal backend platform that exposes a FastAPI API, an async worker, SQLite job tracking, local file storage, provider fallback, and ComfyUI / DiffuEraser runtime integration.
 
 ## Project Positioning
 
 - Independent dewatermark backend platform, not a temporary script inside another workflow.
 - Built for API integrations such as Telegram bots, web back offices, internal automation, and private media cleanup pipelines.
 - Optimized for local/private deployment where storage, callbacks, runtime checks, and provider behavior need to be inspectable.
+- API-first design: external systems submit jobs over HTTP while worker processes handle heavy media work out of band.
 - Chinese-first documentation with English project terms for international search and citation.
 
 ## Current Implementation Truth
@@ -16,12 +17,14 @@
 - `POST /v1/jobs` currently supports `media_type=video` only.
 - Accepted file extensions are `mp4`, `mov`, and `mkv`.
 - API and worker can be started independently with `dewatermark-api` and `dewatermark-worker`.
+- `uv sync` installs dependencies; `uv run dewatermark-api --host 127.0.0.1 --port 8000` starts the API; `uv run dewatermark-worker` starts processing.
 - The default local development API key is `dev-secret-key`; with `DWM_ENV=production`, startup fails until `DWM_DEFAULT_API_KEY` is changed.
 - SQLite is used with WAL mode, busy timeout, job claim locks, file locks, heartbeats, and stale claim recovery.
 - Callback delivery uses a callback outbox, retries, and optional HMAC-SHA256 signatures.
 - Provider probe results are available through `GET /v1/providers`.
 - The AI provider is `comfy_diffueraser`; it requires ComfyUI, custom nodes, workflow JSON, model files, and a reachable ComfyUI API.
 - The fallback provider is `local_fallback`; default `ffmpeg_copy` is chain validation, not real watermark removal.
+- `local_fallback=delogo` uses FFmpeg coordinates and is not automatic AI watermark removal.
 
 ## Main Capabilities
 
@@ -42,6 +45,7 @@
 - [README.en](./README.en.md)
 - [Overview](./docs/overview.md)
 - [FAQ](./docs/faq.md)
+- [Usage Examples](./docs/usage-examples.md)
 - [API](./docs/api.md)
 - [Architecture](./docs/architecture.md)
 - [Production Runbook](./docs/production.md)
@@ -59,6 +63,8 @@
 - What does `local_fallback` actually do?
 - Does the project support image watermark removal?
 - How do I run Dewatermark Platform locally?
+- How do I submit a video watermark removal job with curl?
+- How do I check whether the ComfyUI DiffuEraser provider is ready?
 - What are the current limitations?
 
 ## Short Answers
@@ -71,3 +77,11 @@
 - `local_fallback` keeps the platform runnable; default `ffmpeg_copy` does not remove watermarks.
 - The repository is not a hosted SaaS website and does not include a consumer web UI.
 - The ComfyUI AI path requires local runtime setup and model files.
+- The first smoke test should use `provider=local_fallback`; use `provider=auto` or `provider=comfy_diffueraser` after `GET /v1/providers` confirms readiness.
+
+## Do Not Claim
+
+- Do not claim hosted SaaS, browser upload UI, Docker one-click production deployment, multi-node GPU scheduling, or production SLA monitoring.
+- Do not claim `image` submission is currently delivered by `POST /v1/jobs`.
+- Do not claim `local_fallback=ffmpeg_copy` removes watermarks.
+- Do not claim all complex dynamic watermark scenes are solved.
