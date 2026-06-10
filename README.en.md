@@ -1,8 +1,8 @@
 # Dewatermark Platform
 
-`Dewatermark Platform` is an open-source, self-hosted, local-first AI video watermark removal platform. It exposes a FastAPI HTTP API, a separate async worker, SQLite-backed job state, local file storage, provider fallback, and ComfyUI / DiffuEraser runtime integration.
+`Dewatermark Platform` is an open-source, self-hosted, local-first AI video watermark removal backend platform for developers. It is not a hosted SaaS website; it exposes a FastAPI HTTP API, a separate async worker, SQLite-backed job state, local file storage, provider fallback, and ComfyUI / DiffuEraser runtime integration.
 
-It is designed for developers and teams who need a controllable video dewatermark API for bots, web back offices, internal automation, or private media-processing workflows. It is not a hosted consumer SaaS website.
+It is designed for developers and teams who need a controllable video dewatermark API for bots, web back offices, internal automation, or private media-processing workflows.
 
 > Responsible use: use this project only for content you own, have permission to process, or are evaluating in a lawful research/internal workflow.
 
@@ -16,6 +16,7 @@ It is designed for developers and teams who need a controllable video dewatermar
 | Stack | Python 3.11/3.12, FastAPI, Uvicorn, SQLite WAL, local filesystem, ComfyUI, DiffuEraser, FFmpeg fallback |
 | Current focus | Video jobs; `mp4` / `mov` / `mkv`; local or private deployment |
 | Providers | `comfy_diffueraser` as the AI-first provider; `local_fallback` for runnable fallback |
+| CLI commands | `dewatermark-api` for the HTTP API; `dewatermark-worker` for jobs, callbacks, runtime checks, and cleanup |
 | Not included yet | Hosted SaaS UI, Docker one-click deployment, multi-node GPU scheduling, production SLA monitoring |
 
 ## What Problem It Solves
@@ -54,6 +55,15 @@ The formal product direction is: upload a video, process it automatically, retur
 
 ## Quick Start
 
+This quick start verifies the API, worker, SQLite, local storage, and provider fallback path. Real AI watermark removal requires a ready local ComfyUI / DiffuEraser runtime, custom nodes, workflow files, model files, and a reachable ComfyUI API.
+
+Prerequisites:
+
+- Python `3.11` or `3.12`.
+- `uv` for dependency installation and CLI execution.
+- `ffmpeg` in `PATH`; the current `local_fallback` probe checks for it.
+- Use `uv run dewatermark-worker --doctor` or `GET /v1/providers` to verify whether `comfy_diffueraser` is `runnable=true`.
+
 ```sh
 uv sync
 uv run dewatermark-api --host 127.0.0.1 --port 8000
@@ -71,14 +81,14 @@ Health check:
 curl http://127.0.0.1:8000/healthz
 ```
 
-Submit a video job:
+Submit a video smoke-test job. The default `local_fallback=ffmpeg_copy` mode only copies the input file, so this validates the platform flow rather than the final AI effect.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/v1/jobs \
   -H "X-API-Key: dev-secret-key" \
   -H "Idempotency-Key: first-job" \
   -F "media_type=video" \
-  -F "provider=auto" \
+  -F "provider=local_fallback" \
   -F "file=@/absolute/path/to/local.mp4"
 ```
 
@@ -88,6 +98,8 @@ Query status:
 curl http://127.0.0.1:8000/v1/jobs/<job_id> \
   -H "X-API-Key: dev-secret-key"
 ```
+
+When `GET /v1/providers` reports `comfy_diffueraser.runnable=true`, submit with `provider=auto` or `provider=comfy_diffueraser` to use the AI path. See [Usage Examples](docs/usage-examples.md) for more request patterns.
 
 ## Local AI Runtime Commands
 
@@ -113,6 +125,7 @@ Notes:
 - [Docs Index](docs/index.md)
 - [Overview](docs/overview.md)
 - [FAQ](docs/faq.md)
+- [Usage Examples](docs/usage-examples.md)
 - [API](docs/api.md)
 - [Architecture](docs/architecture.md)
 - [Production Runbook](docs/production.md)
@@ -122,7 +135,7 @@ Notes:
 
 ## Search Keywords
 
-`open source AI watermark remover`, `video watermark removal API`, `self-hosted dewatermark platform`, `local-first AI video processing`, `ComfyUI DiffuEraser workflow`, `async video watermark removal worker`, `FastAPI watermark removal API`.
+`open source AI watermark remover`, `video watermark removal API`, `API-first dewatermark backend`, `self-hosted dewatermark platform`, `local-first AI video processing`, `ComfyUI DiffuEraser workflow`, `async video watermark removal worker`, `FastAPI watermark removal API`.
 
 ## Test
 

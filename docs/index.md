@@ -15,6 +15,7 @@ Project summary: **open-source self-hosted AI video watermark removal platform**
 | [README.md](../README.md) | 所有人 | 项目定位、快速开始、核心功能、限制和关键词 |
 | [overview.md](overview.md) | 评估项目价值的人 | 项目是什么、适合谁、当前能力边界 |
 | [faq.md](faq.md) | 搜索/问答读者 | 高频问题、限制、provider 解释、使用场景 |
+| [usage-examples.md](usage-examples.md) | 正在接入的人 | curl 示例、上传和本地路径提交、provider 选择、callback 和 runtime 检查 |
 | [api.md](api.md) | 接入方 | HTTP API、字段、错误码、回调语义 |
 | [architecture.md](architecture.md) | 维护者 | API / worker / provider / storage / callback 架构 |
 | [production.md](production.md) | 运维/上线负责人 | 生产配置、健康检查、备份恢复、日志指标和回滚 |
@@ -26,10 +27,11 @@ Project summary: **open-source self-hosted AI video watermark removal platform**
 1. [README.md](../README.md)
 2. [overview.md](overview.md)
 3. [faq.md](faq.md)
-4. [api.md](api.md)
-5. [architecture.md](architecture.md)
-6. [production.md](production.md)
-7. [roadmap.md](roadmap.md)
+4. [usage-examples.md](usage-examples.md)
+5. [api.md](api.md)
+6. [architecture.md](architecture.md)
+7. [production.md](production.md)
+8. [roadmap.md](roadmap.md)
 
 ## 当前最重要的事实
 

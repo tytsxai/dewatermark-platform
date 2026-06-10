@@ -2,9 +2,9 @@
 
 [![Release](https://img.shields.io/github/v/release/tytsxai/dewatermark-platform)](https://github.com/tytsxai/dewatermark-platform/releases) · [English](README.en.md) · [llms.txt](llms.txt) · [Changelog](CHANGELOG.md) · [Docs](docs/index.md) · [Issues](https://github.com/tytsxai/dewatermark-platform/issues)
 
-`Dewatermark Platform` 是一个开源、自托管、本地优先的 AI 视频去水印平台。它把视频去水印能力封装成 `FastAPI` HTTP API、独立 worker、SQLite 任务队列、本地文件存储和可替换 provider runtime，适合接入机器人、Web 后台、内部内容处理流水线或私有化媒体处理工具。
+`Dewatermark Platform` 是一个面向开发者的开源、自托管、本地优先 AI 视频去水印后端平台。它不是在线 SaaS 网站，而是把视频去水印能力封装成 `FastAPI` HTTP API、独立 worker、SQLite 任务队列、本地文件存储和可替换 provider runtime，方便机器人、Web 后台、内部内容处理流水线或私有化媒体处理工具接入。
 
-English positioning: **open-source self-hosted AI video watermark removal platform**, **local-first dewatermark API**, **async video watermark removal worker**, **ComfyUI DiffuEraser integration**.
+English positioning: **open-source self-hosted AI video watermark removal platform**, **API-first dewatermark backend**, **local-first video watermark removal API**, **async video dewatermark worker**, **ComfyUI DiffuEraser integration**.
 
 > 合规提醒: 本项目面向你拥有权利或已获得授权的内容处理、内部工作流验证和研究用途。不要用于规避版权、平台规则或第三方权益。
 
@@ -18,6 +18,7 @@ English positioning: **open-source self-hosted AI video watermark removal platfo
 | 技术栈 | Python 3.11/3.12, FastAPI, Uvicorn, SQLite WAL, local filesystem, ComfyUI, DiffuEraser, FFmpeg fallback |
 | 当前重点 | `video` 任务；`mp4` / `mov` / `mkv`；单机本地或私有化部署 |
 | 当前 provider | `comfy_diffueraser` AI 主链；`local_fallback` 保活/兜底链路 |
+| CLI 入口 | `dewatermark-api` 启动 HTTP API；`dewatermark-worker` 执行任务、callback、runtime 检查和清理 |
 | 项目边界 | 不是 SaaS 在线去水印网站；不是商业级效果已调优完成的成品 |
 
 ## 解决什么问题
@@ -70,6 +71,15 @@ English positioning: **open-source self-hosted AI video watermark removal platfo
 
 ## 快速开始 | Quick Start
 
+这个 quick start 的目标是先跑通 API、worker、SQLite、文件存储和 provider fallback 链路。真实 AI 去水印效果取决于本地 ComfyUI / DiffuEraser runtime、custom nodes、workflow 和模型文件是否齐备。
+
+### 0. 前置条件
+
+- Python `3.11` 或 `3.12`。
+- `uv`，用于安装依赖和运行 CLI。
+- `ffmpeg` 在 `PATH` 中；当前 `local_fallback` 探测会检查它。
+- 真实 AI 主链需要本地 ComfyUI / DiffuEraser runtime 和模型文件。先用 `uv run dewatermark-worker --doctor` 或 `GET /v1/providers` 查看是否 `runnable=true`。
+
 ### 1. 安装依赖
 
 ```sh
@@ -102,12 +112,14 @@ curl http://127.0.0.1:8000/healthz
 
 ### 5. 提交视频任务
 
+首次 smoke test 建议显式使用 `provider=local_fallback`。默认 `ffmpeg_copy` 模式只复制输入文件，用于验证平台链路，不代表真实 AI 去水印效果。
+
 ```sh
 curl -X POST http://127.0.0.1:8000/v1/jobs \
   -H "X-API-Key: dev-secret-key" \
   -H "Idempotency-Key: first-job" \
   -F "media_type=video" \
-  -F "provider=auto" \
+  -F "provider=local_fallback" \
   -F "file=@/absolute/path/to/local.mp4"
 ```
 
@@ -120,6 +132,8 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> \
 curl http://127.0.0.1:8000/v1/jobs/<job_id>/result \
   -H "X-API-Key: dev-secret-key"
 ```
+
+当 `GET /v1/providers` 显示 `comfy_diffueraser.runnable=true` 后，可以把提交字段改为 `provider=auto` 或 `provider=comfy_diffueraser` 走 AI 主链。更多请求组合见 [docs/usage-examples.md](docs/usage-examples.md)。
 
 ## 默认开发凭据
 
@@ -155,6 +169,7 @@ uv run dewatermark-worker --start-comfyui
 - 模型清单在 `.runtime/models/manifest.yaml`。
 - runtime 锁定仓库在 `.runtime/lock.yaml`。
 - 默认 ComfyUI API 地址是 `http://127.0.0.1:8188`。
+- `comfy_diffueraser` 只有在 runtime、workflow、custom nodes、模型和 ComfyUI API 都就绪时才会报告 `runnable=true`。
 
 ## API 概览
 
@@ -236,6 +251,7 @@ tests/                API、worker、provider、callback、cleanup 测试
 - [docs/index.md](docs/index.md): 文档总入口
 - [docs/overview.md](docs/overview.md): 项目定位、适用人群、能力边界
 - [docs/faq.md](docs/faq.md): 面向搜索和 AI 检索的常见问题
+- [docs/usage-examples.md](docs/usage-examples.md): 上传、本地路径、provider、callback 和 runtime 示例
 - [docs/api.md](docs/api.md): HTTP API 合同、字段和错误码
 - [docs/architecture.md](docs/architecture.md): API / worker / provider / storage 架构
 - [docs/production.md](docs/production.md): 生产配置、健康检查、备份恢复、日志指标和回滚
@@ -259,16 +275,19 @@ uv run pytest
 - 开源视频去水印 API
 - 本地部署视频去水印
 - 自托管去水印系统
+- AI 视频去水印后端平台
+- 视频去水印异步任务队列
 - ComfyUI 视频去水印
 - DiffuEraser workflow API
 - FastAPI watermark removal API
+- API-first dewatermark backend
 - async video dewatermark worker
 - local-first AI video processing
 - self-hosted watermark remover
 
 建议 GitHub Topics：
 
-`ai`, `video-processing`, `watermark-removal`, `dewatermark`, `comfyui`, `diffueraser`, `fastapi`, `self-hosted`, `async-jobs`, `python`
+`ai`, `video-processing`, `watermark-removal`, `dewatermark`, `comfyui`, `diffueraser`, `fastapi`, `self-hosted`, `async-jobs`, `media-processing`, `python`
 
 ## 开源协作
 
