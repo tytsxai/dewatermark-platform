@@ -181,6 +181,31 @@ def create_app() -> FastAPI:
             priority=priority,
         )
         created = repository.create_job(payload)
+        if not _same_idempotent_request(
+            created,
+            media_type=media_type,
+            provider=provider,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+            priority=priority,
+            input_signature=input_signature,
+            input_path=str(final_input_path),
+        ):
+            if file is not None and final_input_path.exists() and str(final_input_path) != created.input_path:
+                try:
+                    final_input_path.unlink()
+                except OSError:
+                    logger.warning("failed to remove conflicting idempotent upload path=%s", final_input_path)
+            raise AppError(
+                "IDEMPOTENCY_CONFLICT",
+                "idempotency key already used with different request parameters",
+                409,
+            )
+        if file is not None and final_input_path.exists() and str(final_input_path) != created.input_path:
+            try:
+                final_input_path.unlink()
+            except OSError:
+                logger.warning("failed to remove duplicate idempotent upload path=%s", final_input_path)
         return JobSubmitResponse(
             job_id=created.job_id,
             status=created.status,

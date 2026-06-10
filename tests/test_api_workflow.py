@@ -33,7 +33,7 @@ def _upload_payload(files: dict) -> dict:
     return {
         "media_type": "video",
         "provider": "auto",
-        "callback_url": "http://example.com/callback",
+        "callback_url": "https://1.1.1.1/callback",
         "callback_secret": "secret",
     }
 
@@ -105,7 +105,7 @@ def test_submit_job_rejects_idempotency_conflict_when_request_changes(api_client
         data={
             "media_type": "video",
             "provider": "local_fallback",
-            "callback_url": "http://example.com/changed-callback",
+            "callback_url": "https://1.1.1.1/changed-callback",
             "callback_secret": "secret",
         },
     )
@@ -685,6 +685,8 @@ def test_provider_doctor_report_contains_probe_data(settings):
     assert "comfyui_dir" in report
     assert "expected_repo_paths" in report
     assert "system_dependencies" in report
+    assert "production_safety" in report
+    assert report["production_safety"]["ready"] is True
     providers = report["providers"]
     assert isinstance(providers, list)
     assert any(item["name"] == "comfy_diffueraser" for item in providers)
@@ -736,6 +738,94 @@ def test_create_job_returns_existing_record_on_idempotency_conflict(job_repo, se
     second = job_repo.create_job(payload)
 
     assert second.job_id == first.job_id
+
+
+def test_create_job_serializes_conflicting_idempotency_key(job_repo, settings):
+    first = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="local_fallback",
+            fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+            idempotency_key="dup-key-conflict",
+            input_path=str(settings.inbox_dir / "first.mp4"),
+            input_signature="first-signature",
+        )
+    )
+    second = job_repo.create_job(
+        JobCreate(
+            tenant_id=settings.default_tenant_id,
+            media_type="video",
+            provider_requested="local_fallback",
+            fallback_chain_json=JobRepository.default_fallback_chain("local_fallback"),
+            idempotency_key="dup-key-conflict",
+            input_path=str(settings.inbox_dir / "second.mp4"),
+            input_signature="second-signature",
+        )
+    )
+
+    assert second.job_id == first.job_id
+    assert second.input_signature == "first-signature"
+
+
+def test_submit_job_rejects_idempotency_race_conflict(api_client, auth_headers, settings, monkeypatch):
+    created_at = datetime.now(UTC)
+    existing = SimpleNamespace(
+        job_id="job_existing_race",
+        tenant_id=settings.default_tenant_id,
+        status="queued",
+        media_type="video",
+        provider_requested="local_fallback",
+        input_path=str(settings.inbox_dir / "existing.mp4"),
+        input_signature="existing-signature",
+        callback_url=None,
+        callback_secret=None,
+        priority=0,
+        created_at=created_at,
+    )
+
+    class _RaceRepository:
+        @staticmethod
+        def default_fallback_chain(provider_requested: str) -> str:
+            return JobRepository.default_fallback_chain(provider_requested)
+
+        def authenticate_api_key(self, api_key: str) -> str | None:
+            return settings.default_tenant_id if api_key == settings.default_api_key else None
+
+        def find_idempotent_job(self, tenant_id: str, idempotency_key: str | None):
+            return None
+
+        def create_job(self, payload):
+            return existing
+
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: _RaceRepository()
+    monkeypatch.setattr("wm_platform.api_app.get_settings", lambda: settings)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/jobs",
+                headers={**auth_headers, "Idempotency-Key": "race-conflict"},
+                files={"file": ("video.mp4", io.BytesIO(b"\x99" * 16), "video/mp4")},
+                data={
+                    "media_type": "video",
+                    "provider": "auto",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
+
+def test_bootstrap_rejects_default_api_key_in_production(settings):
+    from wm_platform.bootstrap import bootstrap
+
+    prod_settings = replace(settings, environment="production", default_api_key="dev-secret-key")
+
+    with pytest.raises(RuntimeError, match="DWM_DEFAULT_API_KEY"):
+        bootstrap(prod_settings)
 
 
 def test_stale_worker_cannot_overwrite_running_job_or_dispatch_callback(job_repo, settings, monkeypatch):

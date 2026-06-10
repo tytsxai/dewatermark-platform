@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -104,45 +103,42 @@ class JobRepository:
         now = utc_now().isoformat()
         job_id = f"job_{uuid.uuid4().hex[:16]}"
         with db_connection(self.settings) as connection:
-            try:
-                connection.execute(
-                    """
-                    INSERT INTO jobs (
-                        job_id, tenant_id, media_type, status, provider_requested,
-                        provider_selected, fallback_chain_json, idempotency_key,
-                        input_path, input_signature, output_path, callback_url, callback_secret,
-                        priority, attempt_count, duration_ms, error_code, error_message,
-                        created_at, updated_at, claimed_at, lock_owner
-                    )
-                    VALUES (?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, NULL, NULL)
-                    """,
-                    (
-                        job_id,
-                        payload.tenant_id,
-                        payload.media_type,
-                        payload.provider_requested,
-                        payload.fallback_chain_json,
-                        payload.idempotency_key,
-                        payload.input_path,
-                        payload.input_signature,
-                        payload.callback_url,
-                        payload.callback_secret,
-                        payload.priority,
-                        now,
-                        now,
-                    ),
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._find_idempotent_job_row(
+                connection=connection,
+                tenant_id=payload.tenant_id,
+                idempotency_key=payload.idempotency_key,
+            )
+            if existing is not None:
+                return _parse_job(existing)
+
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    job_id, tenant_id, media_type, status, provider_requested,
+                    provider_selected, fallback_chain_json, idempotency_key,
+                    input_path, input_signature, output_path, callback_url, callback_secret,
+                    priority, attempt_count, duration_ms, error_code, error_message,
+                    created_at, updated_at, claimed_at, lock_owner
                 )
-            except sqlite3.IntegrityError:
-                existing = self._find_idempotent_job_row(
-                    connection=connection,
-                    tenant_id=payload.tenant_id,
-                    idempotency_key=payload.idempotency_key,
-                    input_signature=payload.input_signature,
-                    input_path=payload.input_path,
-                )
-                if existing is not None:
-                    return _parse_job(existing)
-                raise
+                VALUES (?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, NULL, NULL)
+                """,
+                (
+                    job_id,
+                    payload.tenant_id,
+                    payload.media_type,
+                    payload.provider_requested,
+                    payload.fallback_chain_json,
+                    payload.idempotency_key,
+                    payload.input_path,
+                    payload.input_signature,
+                    payload.callback_url,
+                    payload.callback_secret,
+                    payload.priority,
+                    now,
+                    now,
+                ),
+            )
             row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return _parse_job(row)
 
@@ -173,8 +169,6 @@ class JobRepository:
         connection,
         tenant_id: str,
         idempotency_key: str | None,
-        input_signature: str | None,
-        input_path: str,
     ) -> Any | None:
         if not idempotency_key:
             return None
@@ -184,14 +178,10 @@ class JobRepository:
             FROM jobs
             WHERE tenant_id = ?
               AND idempotency_key = ?
-              AND (
-                (input_signature IS NOT NULL AND input_signature = ?)
-                OR input_path = ?
-              )
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (tenant_id, idempotency_key, input_signature, input_path),
+            (tenant_id, idempotency_key),
         ).fetchone()
 
     def get_job(self, job_id: str) -> JobRecord | None:

@@ -4,6 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_DEV_API_KEY = "dev-secret-key"
+PRODUCTION_ENVIRONMENTS = {"prod", "production"}
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -11,6 +14,7 @@ def _repo_root() -> Path:
 
 @dataclass(frozen=True)
 class Settings:
+    environment: str
     repo_root: Path
     storage_root: Path
     inbox_dir: Path
@@ -82,6 +86,7 @@ def load_settings() -> Settings:
     delogo_h = os.getenv("DWM_LOCAL_FALLBACK_DELOGO_H")
 
     return Settings(
+        environment=os.getenv("DWM_ENV", "development").strip().lower() or "development",
         repo_root=repo_root,
         storage_root=storage_root,
         inbox_dir=inbox_dir,
@@ -89,7 +94,7 @@ def load_settings() -> Settings:
         db_path=db_path,
         runtime_root=runtime_root,
         default_tenant_id=os.getenv("DWM_DEFAULT_TENANT_ID", "local-dev"),
-        default_api_key=os.getenv("DWM_DEFAULT_API_KEY", "dev-secret-key"),
+        default_api_key=os.getenv("DWM_DEFAULT_API_KEY", DEFAULT_DEV_API_KEY),
         max_upload_bytes=int(os.getenv("DWM_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024))),
         worker_poll_interval_seconds=float(os.getenv("DWM_WORKER_POLL_INTERVAL_SECONDS", "1.0")),
         job_claim_timeout_seconds=int(os.getenv("DWM_JOB_CLAIM_TIMEOUT_SECONDS", "300")),
