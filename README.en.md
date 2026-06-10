@@ -1,56 +1,77 @@
 # Dewatermark Platform
 
-Open source, local-first AI dewatermark platform for asynchronous video watermark removal.
+`Dewatermark Platform` is an open-source, self-hosted, local-first AI video watermark removal platform. It exposes a FastAPI HTTP API, a separate async worker, SQLite-backed job state, local file storage, provider fallback, and ComfyUI / DiffuEraser runtime integration.
 
-This repository is a self-hosted watermark remover platform built around:
+It is designed for developers and teams who need a controllable video dewatermark API for bots, web back offices, internal automation, or private media-processing workflows. It is not a hosted consumer SaaS website.
 
-- FastAPI API service
-- worker-based async job execution
-- local file storage
-- provider routing and fallback
-- ComfyUI-based AI runtime integration
+> Responsible use: use this project only for content you own, have permission to process, or are evaluating in a lawful research/internal workflow.
 
-## What It Is
+## Quick Facts
 
-`Dewatermark Platform` is an open source AI watermark removal platform focused on video workflows. It is designed for developers and teams who need a local, controllable, API-first system instead of a hosted consumer website.
+| Topic | Current status |
+| --- | --- |
+| Project type | Open-source AI video watermark removal platform |
+| Main use case | Submit video jobs over HTTP and process them asynchronously in a worker |
+| Audience | Developers, automation builders, bot/web-backend maintainers, private media workflow teams |
+| Stack | Python 3.11/3.12, FastAPI, Uvicorn, SQLite WAL, local filesystem, ComfyUI, DiffuEraser, FFmpeg fallback |
+| Current focus | Video jobs; `mp4` / `mov` / `mkv`; local or private deployment |
+| Providers | `comfy_diffueraser` as the AI-first provider; `local_fallback` for runnable fallback |
+| Not included yet | Hosted SaaS UI, Docker one-click deployment, multi-node GPU scheduling, production SLA monitoring |
 
-Typical keywords this project targets:
+## What Problem It Solves
 
-- open source AI watermark remover
-- video watermark removal API
-- self-hosted dewatermark platform
-- local-first AI video processing
-- ComfyUI watermark removal pipeline
+Many watermark-removal workflows remain temporary scripts or manual steps inside a larger project. This repository turns the workflow into a platform boundary:
 
-## Current Scope
+- HTTP API for job submission and status queries.
+- Worker-based async execution so heavy AI inference does not block the API process.
+- Provider routing and fallback between the ComfyUI AI path and a local fallback path.
+- Runtime readiness commands for ComfyUI, DiffuEraser workflows, custom nodes, and model files.
+- Callback delivery with retry and optional HMAC-SHA256 signatures.
 
-- Video-first MVP
-- Async job submission and status tracking
-- Provider health checks
-- Callback support
-- Idempotent submissions
-- Local AI runtime doctor / plan / install / health commands
+## Core Features
 
-Current providers:
+- `POST /v1/jobs` to submit video dewatermark jobs.
+- `GET /v1/jobs` and `GET /v1/jobs/{job_id}` to query job state.
+- `GET /v1/jobs/{job_id}/result` to retrieve local output path information.
+- `POST /v1/jobs/{job_id}/cancel` to cancel queued jobs.
+- `GET /v1/providers` to inspect provider/runtime readiness.
+- API key authentication through `X-API-Key`.
+- Idempotent submission through `Idempotency-Key`.
+- Submit rate limiting, defaulting to 60 requests per minute per API key.
+- SQLite WAL, job claims, file locks, worker heartbeat, stale claim recovery.
+- Callback outbox with retries and HMAC-SHA256 signing.
+- File retention cleanup, defaulting to 7 days.
+- Quality profiles: `fast`, `balanced`, `quality`, `corner_hq`.
 
-- `comfy_diffueraser` for the intended AI-first path
-- `local_fallback` for keeping the system runnable
+## Provider Scope
+
+| Provider | Purpose | Important limitation |
+| --- | --- | --- |
+| `comfy_diffueraser` | Main AI provider using ComfyUI API prompts, DiffuEraser workflow files, custom nodes, and required models | It is runnable only when the local ComfyUI runtime and model files are present |
+| `local_fallback` | Keeps API, worker, storage, callback, and job-state flows testable | Default `ffmpeg_copy` only copies the input file; `delogo` requires manual coordinates and is not AI removal |
+
+The formal product direction is: upload a video, process it automatically, return a result. The API model reserves `image`, but `POST /v1/jobs` currently accepts `video` only.
 
 ## Quick Start
 
 ```sh
 uv sync
-uv run dewatermark-api --host 0.0.0.0 --port 8000
+uv run dewatermark-api --host 127.0.0.1 --port 8000
+```
+
+In a second terminal:
+
+```sh
 uv run dewatermark-worker
 ```
 
-Check runtime readiness:
+Health check:
 
 ```sh
-uv run dewatermark-worker --doctor
+curl http://127.0.0.1:8000/healthz
 ```
 
-## API Example
+Submit a video job:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/v1/jobs \
@@ -61,18 +82,50 @@ curl -X POST http://127.0.0.1:8000/v1/jobs \
   -F "file=@/absolute/path/to/local.mp4"
 ```
 
+Query status:
+
+```sh
+curl http://127.0.0.1:8000/v1/jobs/<job_id> \
+  -H "X-API-Key: dev-secret-key"
+```
+
+## Local AI Runtime Commands
+
+```sh
+uv run dewatermark-worker --doctor
+uv run dewatermark-worker --runtime-plan
+uv run dewatermark-worker --install-runtime --repos-only
+uv run dewatermark-worker --comfyui-plan
+uv run dewatermark-worker --comfyui-health
+uv run dewatermark-worker --start-comfyui
+```
+
+Notes:
+
+- `.runtime/lock.yaml` pins runtime repositories.
+- `.runtime/models/manifest.yaml` lists expected model files.
+- The default ComfyUI API endpoint is `http://127.0.0.1:8188`.
+- Set `DWM_ENV=production` and replace the default development API key before exposing the service. Startup fails in production if `DWM_DEFAULT_API_KEY` is still `dev-secret-key`.
+
 ## Documentation
 
-- [Chinese README](./README.md)
-- [Docs Index](./docs/index.md)
-- [Overview](./docs/overview.md)
-- [FAQ](./docs/faq.md)
-- [Architecture](./docs/architecture.md)
-- [API](./docs/api.md)
-- [Requirements](./docs/requirements.md)
-- [Roadmap](./docs/roadmap.md)
-- [LLM Index](./llms.txt)
+- [Chinese README](README.md)
+- [Docs Index](docs/index.md)
+- [Overview](docs/overview.md)
+- [FAQ](docs/faq.md)
+- [API](docs/api.md)
+- [Architecture](docs/architecture.md)
+- [Production Runbook](docs/production.md)
+- [Requirements](docs/requirements.md)
+- [Roadmap](docs/roadmap.md)
+- [LLM Index](llms.txt)
 
-## Status
+## Search Keywords
 
-This project is not a polished SaaS product. It is an open source platform repository focused on making an AI dewatermark system runnable, inspectable, and extensible.
+`open source AI watermark remover`, `video watermark removal API`, `self-hosted dewatermark platform`, `local-first AI video processing`, `ComfyUI DiffuEraser workflow`, `async video watermark removal worker`, `FastAPI watermark removal API`.
+
+## Test
+
+```sh
+uv run pytest
+```

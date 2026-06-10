@@ -19,7 +19,7 @@ client
 
 ```text
 client --[POST /v1/jobs + file]--> API
-  API: 鉴权 → 速率限制 → 幂等检查 → 文件落盘 → 创建 job → 返回 job_id
+  API: 鉴权 → 速率限制 → 幂等检查 → 文件落盘 → 事务内创建/复用 job → 返回 job_id
 
 worker: 轮询 SQLite → 抢锁 (claimed_at + lock_owner + 文件锁) → 心跳续期
   → provider 降级链执行 → 标记 succeeded/failed → enqueue callback
@@ -98,7 +98,7 @@ callback worker: 独立线程轮询 callback_outbox → POST 回调 → 签名�
 
 - 独立轮询 `callback_outbox` 表
 - POST 回调到调用方
-- HMAC-SHA256 签名验证 (X-Signature, X-Timestamp)
+- HMAC-SHA256 签名生成 (X-Signature, X-Timestamp, 由调用方验证)
 - 自动重试 (可配置次数和间隔)
 - 回调失败不影响 job 最终状态
 
@@ -313,3 +313,5 @@ class ProviderAdapter:
 10. ComfyUI 启动使用文件锁 (fcntl) 防止多 worker 竞争。
 11. 回调地址默认拒绝 localhost 和私网 IP (可通过 `DWM_ALLOW_PRIVATE_CALLBACK_URLS` 放开)。
 12. 提交接口有速率限制 (默认 60 次/分钟 per API key)。
+13. 幂等键写入必须在 SQLite 写事务内串行化，不能只依赖 API 层先查再写。
+14. `DWM_ENV=production` 时禁止使用默认开发 API key。

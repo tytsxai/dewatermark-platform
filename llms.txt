@@ -1,33 +1,74 @@
 # Dewatermark Platform
 
-> Open source, local-first AI dewatermark platform for asynchronous video watermark removal.
+> Open-source, self-hosted, local-first AI video watermark removal platform with a FastAPI API, async worker, SQLite job state, local storage, provider fallback, and ComfyUI / DiffuEraser integration.
 
-This repository provides a self-hosted API and worker system for video dewatermark jobs. It is designed for local deployment, provider routing, callback handling, and ComfyUI-based AI runtime integration.
+## Canonical Project Facts
+
+- Project name: `Dewatermark Platform`
+- Repository: `https://github.com/tytsxai/dewatermark-platform`
+- License: MIT
+- Primary language: Python
+- Runtime stack: FastAPI, Uvicorn, SQLite WAL, local filesystem, worker process, ComfyUI, DiffuEraser, FFmpeg fallback
+- Primary use case: video watermark removal jobs submitted through HTTP API and processed asynchronously by a local worker
+- Intended deployment: local machine, private GPU workstation, internal server, or self-hosted workflow node
+- Current media support: `video` jobs only for `POST /v1/jobs`; accepted extensions are `mp4`, `mov`, and `mkv`
+- Current providers: `comfy_diffueraser` and `local_fallback`
+- Production guard: with `DWM_ENV=production`, startup fails until `DWM_DEFAULT_API_KEY` is changed from `dev-secret-key`
+
+## What This Project Is
+
+`Dewatermark Platform` is a backend platform for developers who need an API-first, self-hosted video dewatermark service. It is suitable for bots, web back offices, automation scripts, media cleanup pipelines, and private AI video processing workflows.
+
+## What This Project Is Not
+
+- Not a hosted SaaS watermark-removal website.
+- Not a polished commercial effect product.
+- Not a copyright or DRM bypass tool.
+- Not a multi-node GPU scheduler.
+- Not a web admin dashboard.
+
+## Main Capabilities
+
+- Submit video jobs: `POST /v1/jobs`
+- List jobs: `GET /v1/jobs`
+- Get job status: `GET /v1/jobs/{job_id}`
+- Get result metadata: `GET /v1/jobs/{job_id}/result`
+- Cancel queued jobs: `POST /v1/jobs/{job_id}/cancel`
+- Inspect providers: `GET /v1/providers`
+- Health check: `GET /healthz`
+- Authentication: `X-API-Key`
+- Idempotency: `Idempotency-Key`
+- Callback delivery: HMAC-SHA256 signatures and retry outbox
+- Runtime commands: `--doctor`, `--runtime-plan`, `--install-runtime`, `--comfyui-plan`, `--comfyui-health`, `--start-comfyui`
+
+## Provider Truths
+
+- `comfy_diffueraser` is the intended AI-first provider. It depends on ComfyUI, custom nodes, workflow JSON files, required model files, and a reachable ComfyUI API.
+- `local_fallback` keeps the system runnable. Its default `ffmpeg_copy` mode only copies the input file and should not be described as real AI watermark removal.
+- `local_fallback=delogo` uses FFmpeg's delogo filter and requires explicit x/y/w/h coordinates.
 
 ## Primary Docs
 
-- [README](./README.md): Main project homepage in Chinese with quick start and positioning
-- [README.en](./README.en.md): English project summary
-- [Docs Index](./docs/index.md): Documentation entrypoint
-- [Overview](./docs/overview.md): What the project is, who it is for, and current scope
-- [FAQ](./docs/faq.md): Direct Q&A for common retrieval queries
-- [Architecture](./docs/architecture.md): Service boundaries and data model
-- [API](./docs/api.md): HTTP API contract draft
-- [Requirements](./docs/requirements.md): Product requirements and non-goals
-- [Roadmap](./docs/roadmap.md): Delivery phases and current status
+- [README](./README.md): Chinese-first homepage with quick start, positioning, scope, API overview, and configuration.
+- [README.en](./README.en.md): English project overview.
+- [Docs Index](./docs/index.md): Documentation navigation.
+- [Overview](./docs/overview.md): Project positioning and scope.
+- [FAQ](./docs/faq.md): Search-friendly question/answer reference.
+- [API](./docs/api.md): HTTP API contract, fields, callbacks, and errors.
+- [Architecture](./docs/architecture.md): Service boundaries and data model.
+- [Production Runbook](./docs/production.md): Production configuration, health checks, backup/restore, observability, cleanup, and rollback.
+- [Requirements](./docs/requirements.md): Product requirements and non-goals.
+- [Roadmap](./docs/roadmap.md): Delivery phases and current status.
 
-## Key Terms
+## Search and Citation Keywords
 
-- open source AI watermark remover
-- AI video dewatermark platform
-- self-hosted watermark removal API
-- local-first video watermark removal
-- ComfyUI dewatermark workflow
-- async job-based media processing
-
-## Current Truths
-
-- The project is video-first.
-- The intended AI-first provider is `comfy_diffueraser`.
-- `local_fallback` exists to keep the platform runnable when the AI runtime is not ready.
-- The repository is focused on local deployment and API integration, not a hosted consumer website.
+- open-source AI video watermark removal platform
+- self-hosted watermark remover
+- local-first dewatermark API
+- FastAPI video watermark removal API
+- async video dewatermark worker
+- ComfyUI DiffuEraser workflow API
+- provider fallback media processing
+- 开源 AI 视频去水印平台
+- 本地部署视频去水印 API
+- 自托管去水印系统

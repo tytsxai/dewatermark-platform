@@ -1,85 +1,221 @@
-# Dewatermark Platform | 开源 AI 去水印平台
+# Dewatermark Platform | 开源 AI 视频去水印平台
 
 [![Release](https://img.shields.io/github/v/release/tytsxai/dewatermark-platform)](https://github.com/tytsxai/dewatermark-platform/releases) · [English](README.en.md) · [llms.txt](llms.txt) · [Changelog](CHANGELOG.md) · [Docs](docs/index.md) · [Issues](https://github.com/tytsxai/dewatermark-platform/issues)
 
-> **关键词**:开源 AI 去水印平台 · 本地视频去水印 API · 自托管去水印 · ComfyUI 视频去水印 · Diffueraser · 私有化去水印部署 · 异步去水印 worker · FastAPI 去水印 API
->
-> **Keywords**: open-source AI dewatermark platform · self-hosted video watermark removal · local-first dewatermark API · async video dewatermark jobs · ComfyUI Diffueraser pipeline · private cloud dewatermark · FastAPI watermark removal
+`Dewatermark Platform` 是一个开源、自托管、本地优先的 AI 视频去水印平台。它把视频去水印能力封装成 `FastAPI` HTTP API、独立 worker、SQLite 任务队列、本地文件存储和可替换 provider runtime，适合接入机器人、Web 后台、内部内容处理流水线或私有化媒体处理工具。
 
-Open source, local-first AI dewatermark platform for video workflows.
+English positioning: **open-source self-hosted AI video watermark removal platform**, **local-first dewatermark API**, **async video watermark removal worker**, **ComfyUI DiffuEraser integration**.
 
-这是一个面向本地部署的异步去水印系统,目标是把"AI 视频去水印"做成独立、可接入、可扩展的 API 平台,而不是某个既有工作流里的临时脚本。
+> 合规提醒: 本项目面向你拥有权利或已获得授权的内容处理、内部工作流验证和研究用途。不要用于规避版权、平台规则或第三方权益。
 
-- GitHub: <https://github.com/tytsxai/dewatermark-platform>
-- License: [MIT](./LICENSE)
-- English README: [README.en.md](./README.en.md)
-- AI index: [llms.txt](./llms.txt)
-- Changelog: [CHANGELOG.md](./CHANGELOG.md)
+## 快速判断 | Quick Facts
 
-## 项目是什么
+| 维度 | 当前事实 |
+| --- | --- |
+| 项目类型 | 开源 AI 视频去水印平台 / Open-source AI video watermark removal platform |
+| 核心用途 | 通过 HTTP API 提交视频任务，由独立 worker 异步执行去水印处理 |
+| 适合用户 | 开发者、自动化工具作者、机器人/Web 后台/内容流水线维护者 |
+| 技术栈 | Python 3.11/3.12, FastAPI, Uvicorn, SQLite WAL, local filesystem, ComfyUI, DiffuEraser, FFmpeg fallback |
+| 当前重点 | `video` 任务；`mp4` / `mov` / `mkv`；单机本地或私有化部署 |
+| 当前 provider | `comfy_diffueraser` AI 主链；`local_fallback` 保活/兜底链路 |
+| 项目边界 | 不是 SaaS 在线去水印网站；不是商业级效果已调优完成的成品 |
 
-`Dewatermark Platform` 是一个开源 AI 去水印平台，当前聚焦：
+## 解决什么问题
 
-- AI video watermark removal
-- self-hosted watermark remover
-- local-first dewatermark API
-- async video dewatermark jobs
-- ComfyUI-based video watermark removal pipeline
+很多去水印能力容易停留在临时脚本、人工步骤或某个旧工作流内部。这个仓库解决的是更稳定的工程问题：
 
-它解决的问题很直接：
+1. 外部系统怎样用统一 API 提交视频去水印任务。
+2. 重型 AI 推理怎样从 API 进程中解耦，交给 worker 异步执行。
+3. 本地 ComfyUI / DiffuEraser runtime 怎样做安装计划、就绪检查、启动和探活。
+4. AI provider 不可用时，系统怎样通过 fallback 保持 API、任务、回调和存储链路可验证。
+5. 新接入方怎样查询任务状态、获取结果路径、处理失败和接收回调。
 
-1. 外部系统通过 HTTP API 提交视频去水印任务。
-2. 平台用异步 job 模型执行任务，而不是把重型推理塞进 API 进程。
-3. 本地 AI 主链优先跑 `comfy_diffueraser`，不可用时降级到 `local_fallback` 保证系统先跑通。
+## 适合谁使用
 
-## 项目不是什么
+- 想自托管视频去水印服务的开发者。
+- 需要给 Telegram bot、Web 后台、内部工具接入去水印 API 的团队。
+- 需要 local-first、私有化、可观测、可替换 provider 的媒体处理流水线。
+- 想基于 ComfyUI / DiffuEraser 做本地 AI 视频处理平台化封装的人。
 
-它现在不是：
+不适合：
 
-- SaaS 在线去水印网站
-- 已经调优完成的商业级效果产品
-- 需要用户手工框选水印区域的最终方案
+- 只想找在线网页上传视频的一次性用户。
+- 期待零配置、无需模型、无需 GPU 就得到商业级 AI 去水印效果的用户。
+- 当前就需要多机 GPU 调度、Web 管理后台、账号计费、SLA 监控的一体化 SaaS。
 
-这个仓库的目标从一开始就很明确：
+## 核心功能
 
-- 独立 API
-- 独立 worker
-- 独立 runtime contract
-- 独立文档和开源协作入口
+- `POST /v1/jobs` 提交视频去水印任务，支持文件上传或受限本地路径。
+- `GET /v1/jobs` / `GET /v1/jobs/{job_id}` 查询任务列表和状态。
+- `GET /v1/jobs/{job_id}/result` 获取本地输出路径；当前 `download_url` 预留为 `null`。
+- `POST /v1/jobs/{job_id}/cancel` 取消排队中的任务。
+- `GET /v1/providers` 查看 provider 安装、运行和 ComfyUI runtime 探测结果。
+- API Key 鉴权，默认请求头 `X-API-Key`。
+- `Idempotency-Key` 幂等提交，避免重复创建同一任务。
+- 提交速率限制，默认每个 API key 每分钟 60 次。
+- callback outbox，支持 HMAC-SHA256 签名和失败重试。
+- SQLite WAL、任务抢锁、文件锁、worker 心跳和 stale claim 回收。
+- 文件生命周期清理，默认输入/输出保留 7 天。
+- ComfyUI runtime `doctor / plan / install / health / start` 命令。
+- Quality profiles: `fast` / `balanced` / `quality` / `corner_hq`。
 
-## 核心能力
+## Provider 与真实能力边界
 
-- 开源 AI 视频去水印平台
-- 本地优先，适合私有化部署
-- FastAPI + SQLite + worker 的最小可跑架构
-- 异步任务提交、查询、取消、结果获取
-- API Key 鉴权 + 速率限制 (滑动窗口, per API key)
-- 幂等提交 (Idempotency-Key)
-- provider 路由与失败降级
-- 回调通知与重试 (HMAC-SHA256 签名)
-- 本地 AI runtime `doctor / plan / install / health` 能力
-- Quality profiles (fast / balanced / quality / corner_hq)
-- 文件生命周期管理 (可配置保留天数)
-- 运行元数据记录 (workflow, profile, device, seed)
+| Provider | 当前作用 | 注意事项 |
+| --- | --- | --- |
+| `comfy_diffueraser` | AI 主链，基于 ComfyUI API prompt、DiffuEraser workflow、模型文件和本地 runtime | 只有在 ComfyUI、custom nodes、workflow 和必需模型齐备时才是 `runnable=true` |
+| `local_fallback` | 兜底 provider，用于验证 API、worker、存储、回调和任务状态链路 | 默认 `ffmpeg_copy` 只复制输入文件，不代表 AI 去水印效果；`delogo` 模式需要手工坐标 |
 
-当前 provider：
+当前正式交付口径是“上传视频 -> 系统自动处理 -> 返回结果”。接口层虽然保留 `image` 类型扩展位，但 `POST /v1/jobs` 目前只支持 `video`。
 
-- `comfy_diffueraser`: 本地 AI 主链
-  - ComfyUI API 执行链
-  - 自动启动 + 文件锁防竞争
-  - 动态模型路径解析 (VAE, LoRA, CLIP, ProPainter, Flow, Raft)
-  - Quality profile 参数注入 (steps, subvideo_length, neighbor_length, mask_dilation_iter, ref_stride)
-- `local_fallback`: 兜底 provider
-  - `ffmpeg_copy`: 保活和链路验证
-  - `delogo`: FFmpeg 去水印 (需配置坐标)
+## 快速开始 | Quick Start
+
+### 1. 安装依赖
+
+```sh
+uv sync
+```
+
+### 2. 启动 API
+
+```sh
+uv run dewatermark-api --host 127.0.0.1 --port 8000
+```
+
+### 3. 在另一个终端启动 worker
+
+```sh
+uv run dewatermark-worker
+```
+
+首次启动会创建：
+
+- `storage/app.db`
+- `storage/inbox/`
+- `storage/outbox/`
+
+### 4. 检查服务健康
+
+```sh
+curl http://127.0.0.1:8000/healthz
+```
+
+### 5. 提交视频任务
+
+```sh
+curl -X POST http://127.0.0.1:8000/v1/jobs \
+  -H "X-API-Key: dev-secret-key" \
+  -H "Idempotency-Key: first-job" \
+  -F "media_type=video" \
+  -F "provider=auto" \
+  -F "file=@/absolute/path/to/local.mp4"
+```
+
+### 6. 查询任务和结果
+
+```sh
+curl http://127.0.0.1:8000/v1/jobs/<job_id> \
+  -H "X-API-Key: dev-secret-key"
+
+curl http://127.0.0.1:8000/v1/jobs/<job_id>/result \
+  -H "X-API-Key: dev-secret-key"
+```
+
+## 默认开发凭据
+
+- Default tenant: `local-dev`
+- Default API key: `dev-secret-key`
+- Header: `X-API-Key`
+
+生产或公开网络部署前必须通过环境变量替换默认 key：
+
+```sh
+export DWM_ENV="production"
+export DWM_DEFAULT_API_KEY="replace-with-a-strong-secret"
+```
+
+当 `DWM_ENV=production` 且仍使用默认开发 key `dev-secret-key` 时，服务会拒绝启动。
+
+## 本地 AI Runtime 命令
+
+这些命令用于检查和准备 ComfyUI / DiffuEraser 本地运行时：
+
+```sh
+uv run dewatermark-worker --doctor
+uv run dewatermark-worker --runtime-plan
+uv run dewatermark-worker --install-runtime --repos-only
+uv run dewatermark-worker --comfyui-plan
+uv run dewatermark-worker --comfyui-health
+uv run dewatermark-worker --start-comfyui
+```
+
+说明：
+
+- `--install-runtime --repos-only` 只安装运行时仓库骨架，不下载模型。
+- 模型清单在 `.runtime/models/manifest.yaml`。
+- runtime 锁定仓库在 `.runtime/lock.yaml`。
+- 默认 ComfyUI API 地址是 `http://127.0.0.1:8188`。
+
+## API 概览
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/healthz` | API 和 DB 健康检查 |
+| `POST` | `/v1/jobs` | 提交视频去水印任务 |
+| `GET` | `/v1/jobs` | 分页查询任务列表 |
+| `GET` | `/v1/jobs/{job_id}` | 查询单个任务状态 |
+| `GET` | `/v1/jobs/{job_id}/result` | 查询任务结果 |
+| `POST` | `/v1/jobs/{job_id}/cancel` | 取消 queued 状态任务 |
+| `GET` | `/v1/providers` | 查询 provider/runtime 探测结果 |
+
+更多字段和错误码见 [docs/api.md](docs/api.md)。
+
+## 常用配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DWM_API_HOST` | `127.0.0.1` | CLI API 监听地址 |
+| `DWM_API_PORT` | `8000` | CLI API 监听端口 |
+| `DWM_ENV` | `development` | 运行环境；`production` 会启用生产启动保护 |
+| `DWM_DEFAULT_TENANT_ID` | `local-dev` | 默认租户 |
+| `DWM_DEFAULT_API_KEY` | `dev-secret-key` | 默认开发 API key |
+| `DWM_STORAGE_ROOT` | `storage` | 本地存储根目录 |
+| `DWM_MAX_UPLOAD_BYTES` | `536870912` | 上传大小上限，默认 512 MiB |
+| `DWM_RUNTIME_ROOT` | `.runtime` | 本地 AI runtime 根目录 |
+| `DWM_COMFYUI_API_URL` | `http://127.0.0.1:8188` | ComfyUI API 地址 |
+| `DWM_AUTO_START_COMFYUI` | `false` | provider 运行前是否自动启动 ComfyUI |
+| `DWM_QUALITY_MODE` | `balanced` | `fast` / `balanced` / `quality` / `corner_hq` |
+| `DWM_LOCAL_FALLBACK_MODE` | `ffmpeg_copy` | `ffmpeg_copy` 或 `delogo` |
+| `DWM_FILE_RETENTION_DAYS` | `7` | 输入/输出文件保留天数 |
+| `DWM_ALLOW_PRIVATE_CALLBACK_URLS` | `false` | 是否允许 localhost/私网回调地址 |
+
+`delogo` fallback 还需要配置：
+
+```sh
+export DWM_LOCAL_FALLBACK_MODE=delogo
+export DWM_LOCAL_FALLBACK_DELOGO_X=10
+export DWM_LOCAL_FALLBACK_DELOGO_Y=10
+export DWM_LOCAL_FALLBACK_DELOGO_W=120
+export DWM_LOCAL_FALLBACK_DELOGO_H=60
+```
 
 ## 典型使用场景
 
-- Telegram 机器人接入去水印能力
-- 自有 Web 后台接异步去水印 API
-- 内容清洗流水线接入本地 AI 去水印
-- 私有化环境部署视频去水印服务
-- 需要可控存储、可控回调、可控 runtime 的内部工具链
+- Telegram bot / Discord bot / 企业机器人接入本地视频去水印 API。
+- 自有 Web 后台提交异步视频处理任务。
+- 内容清洗、内容迁移、媒体归档流水线中增加本地视频处理节点。
+- 私有 GPU 工作站或内网服务器运行 ComfyUI / DiffuEraser workflow。
+- 开发者验证 ComfyUI 去水印 workflow 的 API 化、队列化和回调化封装。
+
+## 限制与注意事项
+
+- 当前 `POST /v1/jobs` 只支持 `video`，支持扩展名为 `mp4`、`mov`、`mkv`。
+- `input_path` 必须位于 `DWM_STORAGE_ROOT` 下，避免任意本机路径读取。
+- `comfy_diffueraser` 需要 ComfyUI、custom nodes、workflow 和模型文件齐备。
+- `local_fallback=ffmpeg_copy` 不会真正去水印，只用于链路验证。
+- `local_fallback=delogo` 是传统 FFmpeg 坐标去水印，不是自动 AI 去水印。
+- 当前没有 Web 管理后台、Docker 一键部署、多机调度、账号计费或 SLA 监控。
+- 默认 callback 拒绝 localhost 和私网地址；本地调试需显式设置 `DWM_ALLOW_PRIVATE_CALLBACK_URLS=true`。
 
 ## 仓库结构
 
@@ -91,199 +227,21 @@ src/wm_platform/      平台核心代码
 storage/inbox/        上传输入目录
 storage/outbox/       输出产物目录
 workflows/            ComfyUI workflow / API prompt 模板
-.runtime/             本地 AI runtime contract 与安装目录
+.runtime/             本地 AI runtime contract 与模型清单
+tests/                API、worker、provider、callback、cleanup 测试
 ```
-
-## 快速开始
-
-1. 安装依赖：
-
-```sh
-uv sync
-```
-
-2. 启动 API：
-
-```sh
-uv run dewatermark-api --host 0.0.0.0 --port 8000
-```
-
-3. 启动 worker：
-
-```sh
-uv run dewatermark-worker
-```
-
-4. 检查 provider 和本地 runtime 就绪情况：
-
-```sh
-uv run dewatermark-worker --doctor
-```
-
-5. 查看本地 AI runtime 安装计划：
-
-```sh
-uv run dewatermark-worker --runtime-plan
-```
-
-6. 只安装运行时骨架，不安装模型：
-
-```sh
-uv run dewatermark-worker --install-runtime --repos-only
-```
-
-7. 查看 ComfyUI 启动命令：
-
-```sh
-uv run dewatermark-worker --comfyui-plan
-```
-
-8. 启动并探活 ComfyUI：
-
-```sh
-uv run dewatermark-worker --start-comfyui
-```
-
-API 启动时会自动创建：
-
-- `storage/app.db`
-- `storage/inbox/`
-- `storage/outbox/`
-
-## 默认凭据
-
-- Default tenant: `local-dev`
-- Default API key: `dev-secret-key`
-- Header: `X-API-Key`
-
-## API 示例
-
-提交任务：
-
-```sh
-curl -X POST http://127.0.0.1:8000/v1/jobs \
-  -H "X-API-Key: dev-secret-key" \
-  -H "Idempotency-Key: first-job" \
-  -F "media_type=video" \
-  -F "provider=auto" \
-  -F "file=@/absolute/path/to/local.mp4"
-```
-
-查询 provider 状态：
-
-```sh
-curl http://127.0.0.1:8000/v1/providers -H "X-API-Key: dev-secret-key"
-```
-
-查询任务：
-
-```sh
-curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
-```
-
-## 核心接口
-
-- `POST /v1/jobs`: 提交去水印任务
-- `GET /v1/jobs`: 列表查询
-- `GET /v1/jobs/{job_id}`: 查询任务状态
-- `GET /v1/jobs/{job_id}/result`: 获取结果路径或下载地址
-- `POST /v1/jobs/{job_id}/cancel`: 取消任务
-- `GET /v1/providers`: 查看 provider 健康与能力
-- `GET /healthz`: 服务健康检查
-
-## 运行时与环境变量
-
-启动前可以复制 `.env.example`，或直接设置环境变量。
-
-### 基础配置
-
-- `DWM_DEFAULT_TENANT_ID` / `DWM_DEFAULT_API_KEY`
-- `DWM_STORAGE_ROOT`
-- `DWM_RUNTIME_ROOT`
-- `DWM_MAX_UPLOAD_BYTES`
-
-### ComfyUI / AI Runtime
-
-- `DWM_COMFYUI_API_URL`
-- `DWM_AUTO_START_COMFYUI`
-- `DWM_COMFYUI_DIR`
-- `DWM_COMFYUI_VENV_DIR`
-- `DWM_COMFYUI_CUSTOM_NODES_DIR`
-- `DWM_COMFYUI_MODELS_DIR`
-- `DWM_COMFYUI_WORKFLOWS_DIR`
-- `DWM_COMFYUI_DIFFUERASER_WORKFLOW`
-- `DWM_COMFYUI_SEGMENTATION_REPO` (默认 `briaai/RMBG-2.0`)
-- `DWM_QUALITY_MODE` — quality profile: `fast` / `balanced` / `quality` / `corner_hq` (默认 `balanced`)
-
-### Local Fallback
-
-- `DWM_LOCAL_FALLBACK_MODE` — `ffmpeg_copy` (默认) 或 `delogo`
-- `DWM_LOCAL_FALLBACK_DELOGO_{X,Y,W,H}` — delogo 模式坐标
-
-### 安全与网络
-
-- `DWM_ALLOW_PRIVATE_CALLBACK_URLS` — 允许私网回调地址 (默认拒绝)
-
-### 性能与限制
-
-- `DWM_FILE_RETENTION_DAYS` — 文件保留天数 (默认 7)
-- `DWM_SUBMIT_RATE_LIMIT_COUNT` — 提交速率限制次数 (默认 60)
-- `DWM_SUBMIT_RATE_LIMIT_WINDOW_SECONDS` — 速率限制窗口秒数 (默认 60)
-- `DWM_PROVIDER_RUNTIME_DELAY_SECONDS`
-- `DWM_PROVIDER_PROBE_CACHE_SECONDS` — provider 探测缓存秒数 (默认 10)
-- `DWM_CALLBACK_RETRY_COUNT` — 回调重试次数 (默认 3)
-- `DWM_CALLBACK_RETRY_DELAY_SECONDS` — 回调重试间隔秒数 (默认 1)
-- `DWM_WORKER_POLL_INTERVAL_SECONDS` — worker 轮询间隔 (默认 1.0)
-- `DWM_JOB_CLAIM_TIMEOUT_SECONDS` — job 抢锁超时秒数 (默认 300)
-- `DWM_JOB_CLAIM_HEARTBEAT_SECONDS` — 心跳续期间隔秒数 (默认 30)
-
-`local_fallback` 有两个现实用途：
-
-- `ffmpeg_copy`: 用于保活和链路验证
-- `delogo`: 用于最小可用的本地 FFmpeg 去水印尝试
 
 ## 文档导航
 
-- [docs/index.md](./docs/index.md): 文档总入口
-- [docs/overview.md](./docs/overview.md): 项目概览与定位
-- [docs/faq.md](./docs/faq.md): 常见问题，适合搜索和 AI 检索
-- [docs/api.md](./docs/api.md): API 草案和接口语义
-- [docs/architecture.md](./docs/architecture.md): 架构与模块边界
-- [docs/requirements.md](./docs/requirements.md): 产品需求与能力边界
-- [docs/roadmap.md](./docs/roadmap.md): 路线图
-- [docs/review.md](./docs/review.md): 历史方案审查
-
-## FAQ 摘要
-
-### 这是开源 AI 去水印平台吗？
-
-是。这个仓库是一个开源、本地优先、可自部署的 AI 去水印平台，当前重点是视频去水印。
-
-### 这是网页在线去水印站点吗？
-
-不是。当前是 API + worker + 本地 runtime 的平台仓库，不是面向普通用户的托管网站。
-
-### 当前真正的 AI 主链是什么？
-
-`comfy_diffueraser`。`local_fallback` 只是兜底，不代表最终效果目标。
-
-### 支持图片去水印吗？
-
-接口层预留了 `image`，但当前 MVP 重点是 `video`。
-
-### 适合怎么部署？
-
-最适合单机、本地 GPU、私有化环境，或者作为内部工作流的去水印服务节点。
-
-## 开源协作
-
-- Issues / PRs welcome
-- 文档、runtime contract、provider 接入都可以贡献
-- 当前最有价值的贡献方向：
-  - 模型与 workflow 落地
-  - provider 扩展
-  - 文档完善
-  - 真实效果评估
+- [docs/index.md](docs/index.md): 文档总入口
+- [docs/overview.md](docs/overview.md): 项目定位、适用人群、能力边界
+- [docs/faq.md](docs/faq.md): 面向搜索和 AI 检索的常见问题
+- [docs/api.md](docs/api.md): HTTP API 合同、字段和错误码
+- [docs/architecture.md](docs/architecture.md): API / worker / provider / storage 架构
+- [docs/production.md](docs/production.md): 生产配置、健康检查、备份恢复、日志指标和回滚
+- [docs/requirements.md](docs/requirements.md): 产品需求与非目标
+- [docs/roadmap.md](docs/roadmap.md): 路线图和当前阶段
+- [llms.txt](llms.txt): AI 搜索和 LLM 引用入口
 
 ## 测试
 
@@ -291,16 +249,40 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id> -H "X-API-Key: dev-secret-key"
 uv run pytest
 ```
 
-当前测试覆盖：
+当前测试覆盖 API 健康检查、鉴权、提交与幂等、任务查询、取消、结果、provider 探测、fallback 执行、callback 重试、SQLite WAL、worker 心跳、stale claim 回收、cleanup 和 ComfyUI workflow prompt 注入。
 
-- 健康检查
-- 鉴权失败
-- 提交任务与幂等
-- worker 执行成功并写出文件
-- `provider=auto` 降级链
-- callback 重试
-- `GET /v1/jobs` / `result` / `cancel`
-- `comfy_diffueraser` probe 与 ComfyUI API 执行链
+## 搜索关键词 | Search Keywords
+
+自然关键词：
+
+- 开源 AI 去水印平台
+- 开源视频去水印 API
+- 本地部署视频去水印
+- 自托管去水印系统
+- ComfyUI 视频去水印
+- DiffuEraser workflow API
+- FastAPI watermark removal API
+- async video dewatermark worker
+- local-first AI video processing
+- self-hosted watermark remover
+
+建议 GitHub Topics：
+
+`ai`, `video-processing`, `watermark-removal`, `dewatermark`, `comfyui`, `diffueraser`, `fastapi`, `self-hosted`, `async-jobs`, `python`
+
+## 开源协作
+
+- License: [MIT](LICENSE)
+- Issues: <https://github.com/tytsxai/dewatermark-platform/issues>
+- Pull requests welcome.
+
+当前最有价值的贡献方向：
+
+- ComfyUI / DiffuEraser 模型和 workflow 落地验证。
+- provider 扩展和 provider 探测完善。
+- Docker / 部署文档 / 生产运行手册。
+- 真实样例评估、效果对比和失败场景归档。
+- README、FAQ、API 示例和国际化文档补充。
 
 ## Star History
 

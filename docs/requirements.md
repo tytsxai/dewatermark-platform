@@ -132,7 +132,7 @@ MVP 必须满足：
 - `comfy_diffueraser`
 - `local_fallback`
 
-三者职责现在已经明确：
+两者职责现在已经明确：
 
 - `comfy_diffueraser`
   - 本地 AI 主方案
@@ -190,8 +190,11 @@ MVP 必须满足：
 1. 相同调用方
 2. 相同 `Idempotency-Key`
 3. 相同输入摘要或相同本地路径
+4. 相同 provider、回调地址、回调密钥和优先级
 
 满足时直接返回已有 job，不重复创建。
+
+如果同一调用方复用同一个 `Idempotency-Key` 但参数不同，必须返回 `409 IDEMPOTENCY_CONFLICT`。实现上不能只做 API 层先查再写，写入路径也必须在数据库事务内按 key 串行化。
 
 ## 8. 鉴权和调用约束
 

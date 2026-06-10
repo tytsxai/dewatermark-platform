@@ -1,11 +1,22 @@
 [project]
 name = "dewatermark-platform"
 version = "0.1.0"
-description = "Open source local-first AI video dewatermark platform with async API and worker"
+description = "Open-source self-hosted AI video watermark removal platform with FastAPI, async worker, ComfyUI DiffuEraser integration, and local fallback"
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11,<3.13"
-keywords = ["ai", "dewatermark", "watermark-removal", "video", "comfyui", "fastapi", "self-hosted"]
+keywords = [
+  "ai",
+  "dewatermark",
+  "watermark-removal",
+  "video-watermark-removal",
+  "video-processing",
+  "comfyui",
+  "diffueraser",
+  "fastapi",
+  "self-hosted",
+  "async-jobs",
+]
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
@@ -27,7 +38,7 @@ dependencies = [
 Homepage = "https://github.com/tytsxai/dewatermark-platform"
 Repository = "https://github.com/tytsxai/dewatermark-platform"
 Issues = "https://github.com/tytsxai/dewatermark-platform/issues"
-Documentation = "https://github.com/tytsxai/dewatermark-platform/blob/main/README.md"
+Documentation = "https://github.com/tytsxai/dewatermark-platform/blob/main/docs/index.md"
 
 [project.optional-dependencies]
 dev = [
