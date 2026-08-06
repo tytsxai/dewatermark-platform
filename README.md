@@ -135,6 +135,41 @@ curl http://127.0.0.1:8000/v1/jobs/<job_id>/result \
 
 当 `GET /v1/providers` 显示 `comfy_diffueraser.runnable=true` 后，可以把提交字段改为 `provider=auto` 或 `provider=comfy_diffueraser` 走 AI 主链。更多请求组合见 [docs/usage-examples.md](docs/usage-examples.md)。
 
+### 一键冒烟验证（不需要自备视频）
+
+上面第 5 步要求你填一个真实的 `mp4` 路径。如果只是想确认 API、worker、SQLite、
+存储和 provider 链路是通的，用 `ffmpeg` 现场生成一个 2 秒测试视频即可，整段可以
+直接粘贴运行（API 和 worker 已按第 2、3 步启动）：
+
+```sh
+# 生成一个 2 秒测试视频
+ffmpeg -v quiet -f lavfi -i testsrc=duration=2:size=320x240:rate=10 \
+  -pix_fmt yuv420p /tmp/dewatermark-smoke.mp4 -y
+
+# 提交任务，取回 job_id
+JOB_ID=$(curl -s -X POST http://127.0.0.1:8000/v1/jobs \
+  -H "X-API-Key: dev-secret-key" \
+  -H "Idempotency-Key: smoke-$(date +%s)" \
+  -F "media_type=video" \
+  -F "provider=local_fallback" \
+  -F "file=@/tmp/dewatermark-smoke.mp4" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')
+echo "job_id=$JOB_ID"
+
+# 等 worker 处理完再查结果
+sleep 5
+curl -s "http://127.0.0.1:8000/v1/jobs/$JOB_ID/result" -H "X-API-Key: dev-secret-key"
+```
+
+期望输出（`output_path` 指向 `storage/outbox/` 下的真实文件）：
+
+```json
+{"job_id":"job_xxxxxxxxxxxxxxxx","status":"succeeded","output_path":"<repo>/storage/outbox/job_xxxxxxxxxxxxxxxx.mp4","download_url":null}
+```
+
+如果 `status` 是 `failed`，先看 worker 终端日志，再用 `uv run dewatermark-worker --doctor`
+检查 provider 探测结果。注意 `local_fallback` 的默认 `ffmpeg_copy` 模式只是复制输入
+文件，它验证的是平台链路，不是去水印效果。
+
 ## 默认开发凭据
 
 - Default tenant: `local-dev`

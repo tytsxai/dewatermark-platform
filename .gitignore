@@ -16,3 +16,7 @@ storage/outbox/*
 !storage/inbox/.gitkeep
 !storage/outbox/.gitkeep
 storage/app.db
+storage/app.db-shm
+storage/app.db-wal
+# worker 的文件锁目录，跑一次 dewatermark-worker 就会出现
+storage/.locks/
